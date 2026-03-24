@@ -1,0 +1,66 @@
+# LipSync training configuration
+
+# --- Model ---
+model:
+  img_size: 192            # Output face resolution (96, 128, 192, 256)
+  audio_encoder: "mel"     # mel spectrogram input
+  mel_steps: 16            # mel frames per video frame (same as the reference setup)
+  base_channels: 32        # base channel width (scale up for larger resolution)
+  predict_alpha: false     # disable until blending is wired into the training target
+
+# --- Audio ---
+audio:
+  sample_rate: 16000
+  n_fft: 800
+  hop_size: 200
+  win_size: 800
+  n_mels: 80
+  fmin: 55
+  fmax: 7600
+  preemphasis: 0.97
+
+# --- SyncNet ---
+syncnet:
+  epochs: 50
+  batch_size: 64
+  lr: 1.0e-4
+  T: 5                    # temporal window (video frames)
+  checkpoint: null         # resume from
+
+# --- Generator ---
+generator:
+  epochs: 200
+  batch_size: 4
+  lr: 1.0e-4
+  lr_scheduler: "cosine"
+
+  # Loss weights
+  loss:
+    l1: 1.0                # lower-half reconstruction
+    perceptual: 0.0        # keep off until the model proves it uses audio
+    sync: 0.2              # stronger SyncNet pressure for lip-audio coupling
+    sync_warmup_epochs: 0  # enable sync supervision from the start
+    gan: 0.0               # keep off during audio-sanity phase
+    temporal: 0.0          # handled implicitly by the T=5 generator window
+    alpha_reg: 0.0         # alpha head disabled for now
+
+# --- Data ---
+data:
+  # Paths to datasets (configure before training)
+  voxceleb2_root: null     # /path/to/VoxCeleb2/mp4
+  lrs2_root: null          # /path/to/LRS2/main
+  hdtf_root: null          # /path/to/HDTF
+  talkvid_root: null       # /path/to/TalkVid processed speakers
+
+  fps: 25                  # dataset loader normalizes videos to this fps
+  num_workers: 8
+  crop_size: 256           # face crop from video before resize to img_size
+
+# --- Training ---
+training:
+  device: "cuda"           # cuda, mps, cpu
+  mixed_precision: true
+  gradient_clip: 1.0
+  save_every: 5            # save checkpoint every N epochs
+  sample_every: 1          # generate sample images every N epochs
+  output_dir: "output/training"

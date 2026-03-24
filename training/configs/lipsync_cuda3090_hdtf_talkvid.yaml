@@ -1,0 +1,60 @@
+# Mixed HDTF + TalkVid CUDA/RTX 3090 training run with watchdog evaluation.
+
+model:
+  img_size: 96
+  audio_encoder: "mel"
+  mel_steps: 16
+  base_channels: 32
+  predict_alpha: false
+
+audio:
+  sample_rate: 16000
+  n_fft: 800
+  hop_size: 200
+  win_size: 800
+  n_mels: 80
+  fmin: 55
+  fmax: 7600
+  preemphasis: 0.97
+
+syncnet:
+  epochs: 0
+  batch_size: 8
+  lr: 1.0e-4
+  T: 5
+
+generator:
+  epochs: 10
+  batch_size: 8
+  lr: 1.0e-4
+  lr_scheduler: "cosine"
+  loss:
+    l1: 1.0
+    perceptual: 0.0
+    sync: 0.2
+    sync_warmup_epochs: 0
+    gan: 0.0
+    temporal: 0.0
+    alpha_reg: 0.0
+
+data:
+  hdtf_root: "data/hdtf/processed"
+  talkvid_root: "data/talkvid/processed_medium"
+  fps: 25
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 4
+  crop_size: 256
+  cache_size: 16
+  skip_bad_samples: true
+
+training:
+  device: "cuda"
+  mixed_precision: true
+  allow_tf32: true
+  cudnn_benchmark: true
+  float32_matmul_precision: "high"
+  gradient_clip: 1.0
+  save_every: 1
+  sample_every: 1
+  output_dir: "output/training_cuda3090_lipsync_hdtf_talkvid_latest"
