@@ -165,8 +165,11 @@ def main() -> int:
     parser.add_argument("--ffmpeg-threads", type=int, default=1)
     parser.add_argument("--ffmpeg-timeout", type=int, default=180)
     parser.add_argument("--video-encoder", default="auto")
+    parser.add_argument("--normalized-video-bitrate", default="")
     parser.add_argument("--video-bitrate", default="2200k")
     args = parser.parse_args()
+    args.normalized_video_bitrate = args.normalized_video_bitrate or args.video_bitrate
+    export_script = Path(__file__).with_name("export_faceclip_batch.py").resolve()
 
     root = Path(args.data_root)
     downloads_dir = root / "downloads"
@@ -279,7 +282,7 @@ def main() -> int:
         run_logged(
             [
                 args.python_bin,
-                "training/scripts/export_faceclip_batch.py",
+                str(export_script),
                 "--input-dir",
                 str(extract_root),
                 "--output-dir",
@@ -317,6 +320,8 @@ def main() -> int:
                 str(args.ffmpeg_timeout),
                 "--video-encoder",
                 args.video_encoder,
+                "--normalized-video-bitrate",
+                args.normalized_video_bitrate,
                 "--video-bitrate",
                 args.video_bitrate,
             ],

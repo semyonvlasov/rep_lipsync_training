@@ -31,7 +31,8 @@ FFMPEG_BIN="${FACECLIP_FFMPEG_BIN:-}"
 FFMPEG_THREADS="${FACECLIP_FFMPEG_THREADS:-1}"
 FFMPEG_TIMEOUT="${FACECLIP_FFMPEG_TIMEOUT:-180}"
 VIDEO_ENCODER="${FACECLIP_VIDEO_ENCODER:-auto}"
-VIDEO_BITRATE="${FACECLIP_VIDEO_BITRATE:-2200k}"
+VIDEO_BITRATE="${FACECLIP_VIDEO_BITRATE:-420k}"
+NORMALIZED_VIDEO_BITRATE="${FACECLIP_NORMALIZED_VIDEO_BITRATE:-15m}"
 MAX_ARCHIVES="${FACECLIP_MAX_ARCHIVES:-0}"
 ARCHIVE_GLOB="${FACECLIP_ARCHIVE_GLOB:-*.tar}"
 
@@ -58,7 +59,7 @@ log_cycle "source_folder_id=$SOURCE_FOLDER_ID"
 log_cycle "dest_folder_id=$DEST_FOLDER_ID"
 log_cycle "remote=$REMOTE_NAME archive_glob=$ARCHIVE_GLOB max_archives=$MAX_ARCHIVES"
 log_cycle "detector=$DETECTOR_BACKEND/$DETECTOR_DEVICE detector_batch_size=$DETECTOR_BATCH_SIZE resize_device=$RESIZE_DEVICE"
-log_cycle "video_encoder=$VIDEO_ENCODER video_bitrate=$VIDEO_BITRATE ffmpeg_threads=$FFMPEG_THREADS"
+log_cycle "video_encoder=$VIDEO_ENCODER normalized_video_bitrate=$NORMALIZED_VIDEO_BITRATE video_bitrate=$VIDEO_BITRATE ffmpeg_threads=$FFMPEG_THREADS"
 
 "$PYTHON_BIN" scripts/process_faceclip_archives_from_gdrive.py \
   --source-folder-id "$SOURCE_FOLDER_ID" \
@@ -82,6 +83,7 @@ log_cycle "video_encoder=$VIDEO_ENCODER video_bitrate=$VIDEO_BITRATE ffmpeg_thre
   --ffmpeg-threads "$FFMPEG_THREADS" \
   --ffmpeg-timeout "$FFMPEG_TIMEOUT" \
   --video-encoder "$VIDEO_ENCODER" \
+  --normalized-video-bitrate "$NORMALIZED_VIDEO_BITRATE" \
   --video-bitrate "$VIDEO_BITRATE"
 
 log_cycle "done"

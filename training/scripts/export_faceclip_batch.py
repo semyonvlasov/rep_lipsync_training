@@ -41,6 +41,7 @@ from scripts.preprocess_dataset import (  # noqa: E402
 from scripts.sort_talkvid_processed_by_quality import classify_sample  # noqa: E402
 from scripts.transcode_video import (  # noqa: E402
     VIDEO_ENCODER_CHOICES,
+    build_video_codec_args,
     media_file_is_valid,
     normalize_video_clip,
     resolve_ffmpeg_bin,
@@ -161,14 +162,7 @@ def mux_video_and_audio(
     ]
     if ffmpeg_threads and ffmpeg_threads > 0:
         cmd.extend(["-threads", str(int(ffmpeg_threads))])
-    if video_encoder == "libx264":
-        cmd.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "23"])
-    elif video_encoder == "h264_videotoolbox":
-        cmd.extend(["-c:v", "h264_videotoolbox", "-allow_sw", "1", "-b:v", str(video_bitrate)])
-    elif video_encoder == "h264_nvenc":
-        cmd.extend(["-c:v", "h264_nvenc", "-preset", "p4", "-b:v", str(video_bitrate)])
-    else:
-        raise ValueError(f"unsupported video_encoder={video_encoder}")
+    cmd.extend(build_video_codec_args(video_encoder, video_bitrate))
     cmd.extend(
         [
             "-c:a",
@@ -230,7 +224,7 @@ def normalize_if_needed(input_video: Path, normalized_path: Path, args) -> tuple
         ffmpeg_bin=args.ffmpeg_bin,
         ffmpeg_threads=args.ffmpeg_threads,
         video_encoder=args.video_encoder,
-        video_bitrate=args.video_bitrate,
+        video_bitrate=args.normalized_video_bitrate,
         timeout=args.ffmpeg_timeout,
     )
     if not ok:
@@ -357,6 +351,8 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
             "detector_batch_size": int(args.detector_batch_size),
             "resize_device": effective_resize_device,
             "video_encoder": args.video_encoder,
+            "normalized_video_bitrate": args.normalized_video_bitrate,
+            "video_bitrate": args.video_bitrate,
             "trim_start_frame": int(trim_start),
             "trim_end_frame": int(trim_end),
             "trimmed_frame_indices": [int(v) for v in trimmed_indices.tolist()],
@@ -411,11 +407,13 @@ def main() -> int:
     parser.add_argument("--ffmpeg-threads", type=int, default=1)
     parser.add_argument("--ffmpeg-timeout", type=int, default=180)
     parser.add_argument("--video-encoder", choices=VIDEO_ENCODER_CHOICES, default="auto")
+    parser.add_argument("--normalized-video-bitrate", default="")
     parser.add_argument("--video-bitrate", default="2200k")
     args = parser.parse_args()
 
     args.ffmpeg_bin = resolve_ffmpeg_bin(args.ffmpeg_bin)
     args.video_encoder = select_video_encoder(args.video_encoder, args.ffmpeg_bin)
+    args.normalized_video_bitrate = args.normalized_video_bitrate or args.video_bitrate
 
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
@@ -452,7 +450,11 @@ def main() -> int:
         )
     else:
         log(f"[FaceclipExport] resize_device={effective_resize_device}")
-    log(f"[FaceclipExport] video_encoder={args.video_encoder}")
+    log(
+        f"[FaceclipExport] video_encoder={args.video_encoder} "
+        f"normalized_video_bitrate={args.normalized_video_bitrate} "
+        f"video_bitrate={args.video_bitrate}"
+    )
 
     videos = list(iter_videos(input_dir))
     log(f"[FaceclipExport] videos={len(videos)}")
@@ -494,6 +496,8 @@ def main() -> int:
         "source_archive": args.source_archive,
         "dataset_kind": dataset_kind,
         "video_encoder": args.video_encoder,
+        "normalized_video_bitrate": args.normalized_video_bitrate,
+        "video_bitrate": args.video_bitrate,
         "detector_backend": args.detector_backend,
         "detector_device": resolve_detector_device(args.detector_backend, args.detector_device),
         "resize_device": effective_resize_device,

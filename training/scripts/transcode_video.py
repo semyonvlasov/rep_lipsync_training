@@ -14,8 +14,11 @@ from functools import lru_cache
 VIDEO_ENCODER_CHOICES = [
     "auto",
     "libx264",
+    "libx265",
     "h264_videotoolbox",
     "h264_nvenc",
+    "hevc_videotoolbox",
+    "hevc_nvenc",
 ]
 
 
@@ -56,7 +59,7 @@ def _available_encoders(ffmpeg_bin):
 
 @lru_cache(maxsize=32)
 def _probe_encoder(ffmpeg_bin, video_encoder):
-    if video_encoder == "libx264":
+    if video_encoder in {"libx264", "libx265"}:
         return True, "software"
 
     tmp_path = None
@@ -148,6 +151,8 @@ def select_video_encoder(requested, ffmpeg_bin):
 def build_video_codec_args(video_encoder, video_bitrate):
     if video_encoder == "libx264":
         return ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+    if video_encoder == "libx265":
+        return ["-c:v", "libx265", "-preset", "medium", "-b:v", str(video_bitrate)]
     if video_encoder == "h264_videotoolbox":
         return [
             "-c:v",
@@ -161,6 +166,24 @@ def build_video_codec_args(video_encoder, video_bitrate):
         return [
             "-c:v",
             "h264_nvenc",
+            "-preset",
+            "p4",
+            "-b:v",
+            str(video_bitrate),
+        ]
+    if video_encoder == "hevc_videotoolbox":
+        return [
+            "-c:v",
+            "hevc_videotoolbox",
+            "-allow_sw",
+            "1",
+            "-b:v",
+            str(video_bitrate),
+        ]
+    if video_encoder == "hevc_nvenc":
+        return [
+            "-c:v",
+            "hevc_nvenc",
             "-preset",
             "p4",
             "-b:v",
