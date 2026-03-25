@@ -10,6 +10,7 @@ HOP160_CKPT="${HOP160_CKPT:-output/syncnet_hop160_ablation_25k_6ep_20260325/sync
 HDTF_PROCESSED_ROOT="${HDTF_PROCESSED_ROOT:-data/hdtf/processed}"
 TALKVID_PROCESSED_ROOT="${TALKVID_PROCESSED_ROOT:-data/talkvid/processed_medium}"
 OFFICIAL_SYNCNET_PATH="${OFFICIAL_SYNCNET_PATH:-../../models/wav2lip/checkpoints/lipsync_expert.pth}"
+DATASET_SPEAKER_FILTER="${DATASET_SPEAKER_FILTER:-}"
 TRAIN_SELECTION="${TRAIN_SELECTION:-newest}"
 MAX_TRAIN_FRAMES="${MAX_TRAIN_FRAMES:-25000}"
 SYNCNET_HOLDOUT_COUNT="${SYNCNET_HOLDOUT_COUNT:-20}"
@@ -29,13 +30,14 @@ cd "$TRAINING_ROOT"
 echo "[hop-ablation] started at $(date '+%Y-%m-%d %H:%M:%S %Z')"
 echo "[hop-ablation] hop200_config=$HOP200_CONFIG"
 echo "[hop-ablation] hop160_config=$HOP160_CONFIG"
+echo "[hop-ablation] dataset_speaker_filter=${DATASET_SPEAKER_FILTER:-<none>}"
 echo "[hop-ablation] train_selection=$TRAIN_SELECTION max_train_frames=$MAX_TRAIN_FRAMES holdout_count=$SYNCNET_HOLDOUT_COUNT compare_samples=$SYNCNET_COMPARE_SAMPLES"
 
-TRAIN_LIST="$OUT/train_speakers_25k.txt"
+TRAIN_LIST="$OUT/train_speakers.txt"
 HOLDOUT_LIST="$OUT/holdout_unseen_speakers.txt"
 SPLIT_SUMMARY="$OUT/split_summary.json"
-COMPARE_JSON="$OUT/syncnet_teacher_compare_200.json"
-SELECTED_JSON="$OUT/syncnet_selected_teacher_200.json"
+COMPARE_JSON="$OUT/syncnet_teacher_compare.json"
+SELECTED_JSON="$OUT/syncnet_selected_teacher.json"
 
 python3 -u scripts/build_syncnet_holdout_split.py \
   --processed-root "$HDTF_PROCESSED_ROOT" \
@@ -43,6 +45,7 @@ python3 -u scripts/build_syncnet_holdout_split.py \
   --holdout-count "$SYNCNET_HOLDOUT_COUNT" \
   --max-train-frames "$MAX_TRAIN_FRAMES" \
   --train-selection "$TRAIN_SELECTION" \
+  ${DATASET_SPEAKER_FILTER:+--speaker-list "$DATASET_SPEAKER_FILTER"} \
   --train-out "$TRAIN_LIST" \
   --holdout-out "$HOLDOUT_LIST" \
   --summary-out "$SPLIT_SUMMARY"
@@ -68,28 +71,36 @@ if [[ ! -f "$HOP160_CKPT" ]]; then
 fi
 
 echo "[hop-ablation] comparing teachers at $(date '+%Y-%m-%d %H:%M:%S %Z')"
-python3 -u scripts/compare_syncnet_teachers.py \
-  --processed-root "$HDTF_PROCESSED_ROOT" \
-  --processed-root "$TALKVID_PROCESSED_ROOT" \
-  --speaker-snapshot "$TRAIN_LIST" \
-  --speaker-list "$HOLDOUT_LIST" \
-  --official-checkpoint "$OFFICIAL_SYNCNET_PATH" \
-  --checkpoints "$HOP200_CKPT" "$HOP160_CKPT" \
-  --output "$COMPARE_JSON" \
-  --samples "$SYNCNET_COMPARE_SAMPLES" \
-  --seed "$SYNCNET_COMPARE_SEED" \
-  --device "$SYNCNET_COMPARE_DEVICE" \
-  --fps 25 \
-  --T 5 \
-  --cache-size 16 \
-  --lazy-cache-root "$LAZY_CACHE_ROOT" \
+COMPARE_ARGS=(
+  --processed-root "$HDTF_PROCESSED_ROOT"
+  --processed-root "$TALKVID_PROCESSED_ROOT"
+  --speaker-snapshot "$TRAIN_LIST"
+  --speaker-list "$HOLDOUT_LIST"
+  --checkpoints "$HOP200_CKPT" "$HOP160_CKPT"
+  --output "$COMPARE_JSON"
+  --samples "$SYNCNET_COMPARE_SAMPLES"
+  --seed "$SYNCNET_COMPARE_SEED"
+  --device "$SYNCNET_COMPARE_DEVICE"
+  --fps 25
+  --T 5
+  --cache-size 16
+  --lazy-cache-root "$LAZY_CACHE_ROOT"
   --materialize-frames-size "$MATERIALIZE_FRAMES_SIZE"
+)
+if [[ -n "$OFFICIAL_SYNCNET_PATH" ]]; then
+  COMPARE_ARGS+=(--official-checkpoint "$OFFICIAL_SYNCNET_PATH")
+fi
+python3 -u scripts/compare_syncnet_teachers.py "${COMPARE_ARGS[@]}"
 
 echo "[hop-ablation] selecting teacher at $(date '+%Y-%m-%d %H:%M:%S %Z')"
-python3 -u scripts/select_best_syncnet_teacher.py \
-  --compare-json "$COMPARE_JSON" \
-  --official-checkpoint "$OFFICIAL_SYNCNET_PATH" \
-  --checkpoints "$HOP200_CKPT" "$HOP160_CKPT" \
+SELECT_ARGS=(
+  --compare-json "$COMPARE_JSON"
+  --checkpoints "$HOP200_CKPT" "$HOP160_CKPT"
   --output "$SELECTED_JSON"
+)
+if [[ -n "$OFFICIAL_SYNCNET_PATH" ]]; then
+  SELECT_ARGS+=(--official-checkpoint "$OFFICIAL_SYNCNET_PATH")
+fi
+python3 -u scripts/select_best_syncnet_teacher.py "${SELECT_ARGS[@]}"
 
 echo "[hop-ablation] finished at $(date '+%Y-%m-%d %H:%M:%S %Z')"

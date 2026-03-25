@@ -261,27 +261,33 @@ def evaluate_teachers(args):
     snapshot_names = load_snapshot(args.speaker_snapshot)
     requested_holdout = load_allowlist(args.speaker_list)
 
-    official_spec = {
-        "name": "official_wav2lip",
-        "kind": "official",
-        "checkpoint": args.official_checkpoint,
-        "audio_cfg": {
-            "sample_rate": args.official_sample_rate,
-            "n_fft": args.official_n_fft,
-            "hop_size": args.official_hop_size,
-            "win_size": args.official_win_size,
-            "n_mels": args.official_n_mels,
-            "fmin": args.official_fmin,
-            "fmax": args.official_fmax,
-            "preemphasis": args.official_preemphasis,
-        },
-        "mel_steps": int(args.official_mel_steps),
-        "img_size": int(args.official_img_size),
-        "T": int(args.T),
-    }
+    teacher_specs = []
+    if args.official_checkpoint:
+        teacher_specs.append(
+            {
+                "name": "official_wav2lip",
+                "kind": "official",
+                "checkpoint": args.official_checkpoint,
+                "audio_cfg": {
+                    "sample_rate": args.official_sample_rate,
+                    "n_fft": args.official_n_fft,
+                    "hop_size": args.official_hop_size,
+                    "win_size": args.official_win_size,
+                    "n_mels": args.official_n_mels,
+                    "fmin": args.official_fmin,
+                    "fmax": args.official_fmax,
+                    "preemphasis": args.official_preemphasis,
+                },
+                "mel_steps": int(args.official_mel_steps),
+                "img_size": int(args.official_img_size),
+                "T": int(args.T),
+            }
+        )
 
     local_specs = [load_local_teacher_spec(path, default_T=args.T) for path in args.checkpoints]
-    teacher_specs = [official_spec] + local_specs
+    teacher_specs.extend(local_specs)
+    if not teacher_specs:
+        raise RuntimeError("Need at least one teacher to compare")
 
     if any(spec["T"] != args.T for spec in teacher_specs):
         bad = {spec["name"]: spec["T"] for spec in teacher_specs if spec["T"] != args.T}
@@ -289,7 +295,7 @@ def evaluate_teachers(args):
             f"All teacher checkpoints must match --T={args.T} for a fair compare, got {bad}"
         )
 
-    base_dataset = build_dataset_for_spec(official_spec, args, requested_holdout)
+    base_dataset = build_dataset_for_spec(teacher_specs[0], args, requested_holdout)
     holdout_items = build_holdout_items(base_dataset, snapshot_names)
     if requested_holdout is not None:
         requested_missing = sorted(requested_holdout - {item["name"] for item in holdout_items})
@@ -386,7 +392,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--processed-root", action="append", required=True)
     parser.add_argument("--speaker-snapshot", required=True)
-    parser.add_argument("--official-checkpoint", required=True)
+    parser.add_argument("--official-checkpoint", default=None)
     parser.add_argument("--checkpoints", nargs="+", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--speaker-list", default=None, help="Optional unseen holdout allowlist")

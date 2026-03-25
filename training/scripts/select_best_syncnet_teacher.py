@@ -35,7 +35,7 @@ def metric_key(name, metrics):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compare-json", required=True)
-    parser.add_argument("--official-checkpoint", required=True)
+    parser.add_argument("--official-checkpoint", default=None)
     parser.add_argument("--checkpoints", nargs="*", default=[])
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -58,6 +58,8 @@ def main():
     )
 
     if winner_name in {"official_syncnet", "official_wav2lip"}:
+        if not args.official_checkpoint:
+            raise RuntimeError("Winner is official, but --official-checkpoint was not provided")
         winner_path = args.official_checkpoint
         winner_kind = "official"
     else:
