@@ -15,6 +15,8 @@ The script reports threshold-free ranking quality:
 """
 
 import argparse
+import contextlib
+import io
 import importlib.util
 import json
 import os
@@ -29,6 +31,8 @@ import torch.nn.functional as F
 
 TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TRAINING_ROOT)
+sys.path.insert(0, TRAINING_ROOT)
+from data import LipSyncDataset
 
 
 def load_snapshot(path):
@@ -73,59 +77,64 @@ def build_mel_chunks(mel, fps, mel_step_size=16):
 
 
 class HoldoutSet:
-    def __init__(self, processed_roots, snapshot_path, fps=25, cache_size=16, speaker_allowlist=None):
+    def __init__(
+        self,
+        processed_roots,
+        snapshot_path,
+        fps=25,
+        cache_size=16,
+        speaker_allowlist=None,
+        img_size=96,
+        mel_step_size=16,
+        audio_cfg=None,
+        T=5,
+        lazy_cache_root=None,
+        ffmpeg_bin="ffmpeg",
+        materialize_timeout=600,
+    ):
         self.processed_roots = processed_roots
         self.snapshot = load_snapshot(snapshot_path)
         self.speaker_allowlist = speaker_allowlist
         self.fps = fps
         self.cache = OrderedDict()
         self.cache_size = max(int(cache_size), 0)
+        self.audio_cfg = dict(audio_cfg or {})
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.dataset = LipSyncDataset(
+                roots=processed_roots,
+                img_size=img_size,
+                mel_step_size=mel_step_size,
+                fps=fps,
+                audio_cfg=self.audio_cfg,
+                syncnet_T=T,
+                mode="syncnet",
+                cache_size=cache_size,
+                skip_bad_samples=True,
+                speaker_allowlist=speaker_allowlist,
+                lazy_cache_root=lazy_cache_root,
+                ffmpeg_bin=ffmpeg_bin,
+                materialize_timeout=materialize_timeout,
+                materialize_frames_size=img_size,
+            )
         self.items = self._collect_items()
 
     def _collect_items(self):
         items = []
-        seen = {}
-        duplicates = []
-        for processed_root in self.processed_roots:
-            for name in sorted(os.listdir(processed_root)):
-                speaker_dir = os.path.join(processed_root, name)
-                if not os.path.isdir(speaker_dir):
-                    continue
-                if self.speaker_allowlist is not None and name not in self.speaker_allowlist:
-                    continue
-                if name in self.snapshot:
-                    continue
-                meta = load_meta(speaker_dir)
-                if meta.get("bad_sample", False):
-                    continue
-                frames_path = os.path.join(speaker_dir, "frames.npy")
-                mel_path = os.path.join(speaker_dir, "mel.npy")
-                if not (os.path.exists(frames_path) and os.path.exists(mel_path)):
-                    continue
-                if name in seen:
-                    duplicates.append((name, seen[name], processed_root))
-                    continue
-                seen[name] = processed_root
-                frames = np.load(frames_path, mmap_mode="r")
-                mel = np.load(mel_path, mmap_mode="r")
-                mel_chunks = build_mel_chunks(mel, self.fps)
-                n_frames = min(int(frames.shape[0]), len(mel_chunks))
-                if n_frames < 12:
-                    continue
-                items.append({
+        for speaker_key in self.dataset.speakers:
+            entry = self.dataset._entries[speaker_key]
+            name = entry["name"]
+            if name in self.snapshot:
+                continue
+            n_frames = self.dataset._entry_frame_count(entry)
+            if n_frames < 12:
+                continue
+            items.append(
+                {
                     "name": name,
-                    "dir": speaker_dir,
-                    "processed_root": processed_root,
+                    "key": speaker_key,
+                    "type": entry["type"],
                     "n_frames": n_frames,
-                })
-        if duplicates:
-            detail = "\n".join(
-                f"  - {name}: {root_a} vs {root_b}"
-                for name, root_a, root_b in duplicates[:20]
-            )
-            raise RuntimeError(
-                "Duplicate speaker names across processed roots would make holdout comparison ambiguous:\n"
-                f"{detail}"
+                }
             )
         return items
 
@@ -135,14 +144,12 @@ class HoldoutSet:
             self.cache.popitem(last=False)
 
     def load_item(self, item):
-        key = item["dir"]
+        key = item["key"]
         if key in self.cache:
             value = self.cache.pop(key)
             self.cache[key] = value
             return value
-        frames = np.load(os.path.join(item["dir"], "frames.npy"), mmap_mode="r")
-        mel = np.load(os.path.join(item["dir"], "mel.npy"))
-        mel_chunks = build_mel_chunks(mel, self.fps)
+        frames, mel_chunks, _ = self.dataset._load_speaker(key)
         n_frames = min(int(frames.shape[0]), len(mel_chunks))
         value = (frames, mel_chunks, n_frames)
         self._remember(key, value)
@@ -273,6 +280,22 @@ def evaluate_teachers(args):
         fps=args.fps,
         cache_size=args.cache_size,
         speaker_allowlist=load_allowlist(args.speaker_list),
+        img_size=args.img_size,
+        mel_step_size=args.mel_step_size,
+        audio_cfg={
+            "sample_rate": args.sample_rate,
+            "hop_size": args.hop_size,
+            "n_fft": args.n_fft,
+            "win_size": args.win_size,
+            "n_mels": args.n_mels,
+            "fmin": args.fmin,
+            "fmax": args.fmax,
+            "preemphasis": args.preemphasis,
+        },
+        T=args.T,
+        lazy_cache_root=args.lazy_cache_root,
+        ffmpeg_bin=args.ffmpeg_bin,
+        materialize_timeout=args.materialize_timeout,
     )
     if not holdout.items:
         raise RuntimeError("No valid holdout speakers found after excluding the snapshot and bad samples")
@@ -366,6 +389,18 @@ def main():
     parser.add_argument("--fps", type=int, default=25)
     parser.add_argument("--T", type=int, default=5)
     parser.add_argument("--img-size", type=int, default=96)
+    parser.add_argument("--mel-step-size", type=int, default=16)
+    parser.add_argument("--sample-rate", type=int, default=16000)
+    parser.add_argument("--hop-size", type=int, default=200)
+    parser.add_argument("--n-fft", type=int, default=800)
+    parser.add_argument("--win-size", type=int, default=800)
+    parser.add_argument("--n-mels", type=int, default=80)
+    parser.add_argument("--fmin", type=float, default=55.0)
+    parser.add_argument("--fmax", type=float, default=7600.0)
+    parser.add_argument("--preemphasis", type=float, default=0.97)
+    parser.add_argument("--lazy-cache-root", default=None)
+    parser.add_argument("--ffmpeg-bin", default="ffmpeg")
+    parser.add_argument("--materialize-timeout", type=int, default=600)
     parser.add_argument("--cache-size", type=int, default=16)
     args = parser.parse_args()
 
