@@ -340,7 +340,7 @@ Active runtime:
 
 ```bash
 python3 training/scripts/download_talkvid.py \
-  --output /Users/semenvlasov/Documents/repos/lipsync_test/training/data/talkvid_local \
+  --output training/data/talkvid_local \
   --variant with_captions \
   --max-height 720 \
   --min-duration 4.0 \
@@ -352,9 +352,9 @@ python3 training/scripts/download_talkvid.py \
   --target-additional-gb 1.0 \
   --min-free-gb 5.0 \
   --timeout 300 \
-  --skip-manifest /Users/semenvlasov/Documents/repos/lipsync_test/training/data/talkvid_local/download_manifest.jsonl \
-  --skip-manifest /Users/semenvlasov/Documents/repos/lipsync_test/training/data/talkvid_local/archives/batches_manifest.jsonl \
-  --skip-manifest /Users/semenvlasov/Documents/repos/lipsync_test/training/data/talkvid_local/archives/uploaded_manifest.jsonl \
+  --skip-manifest training/data/talkvid_local/download_manifest.jsonl \
+  --skip-manifest training/data/talkvid_local/archives/batches_manifest.jsonl \
+  --skip-manifest training/data/talkvid_local/archives/uploaded_manifest.jsonl \
   --cookies-file /tmp/talkvid_local_cookies.txt \
   --jobs 4
 ```
@@ -385,7 +385,7 @@ Local cookies file currently in use:
 - `/tmp/talkvid_local_cookies.txt`
 
 Source Safari export used to build that file:
-- `/Users/semenvlasov/Downloads/Cookies.binarycookies`
+- `<path-to-exported-Cookies.binarycookies>`
 
 ## What was changed
 
@@ -492,13 +492,13 @@ The manifest tail also shows fresh `status=ok` entries for the same period.
 Watch the live log:
 
 ```bash
-tail -f /Users/semenvlasov/Documents/repos/lipsync_test/training/output/talkvid_local_cycle/cycle.log
+tail -f training/output/talkvid_local_cycle/cycle.log
 ```
 
 Check the active fetch pid from the log:
 
 ```bash
-rg -n "fetch pid=" /Users/semenvlasov/Documents/repos/lipsync_test/training/output/talkvid_local_cycle/cycle.log | tail
+rg -n "fetch pid=" training/output/talkvid_local_cycle/cycle.log | tail
 ```
 
 Check whether the current downloader pid is still alive:
@@ -510,7 +510,7 @@ ps -p 98663 -o pid,ppid,%cpu,%mem,etime,state,command
 Restart the loop manually with the current cookie file:
 
 ```bash
-caffeinate -dimsu /bin/zsh /Users/semenvlasov/Documents/repos/lipsync_test/training/run_local_talkvid_batch_cycle.sh
+caffeinate -dimsu /bin/zsh training/run_local_talkvid_batch_cycle.sh
 ```
 
 If cookies need to be rebuilt from a copied Safari export:
@@ -519,7 +519,7 @@ If cookies need to be rebuilt from a copied Safari export:
 python3 - <<'PY'
 import browser_cookie3
 from http.cookiejar import MozillaCookieJar
-src = '/Users/semenvlasov/Downloads/Cookies.binarycookies'
+src = '<path-to-exported-Cookies.binarycookies>'
 out = '/tmp/talkvid_local_cookies.txt'
 jar = browser_cookie3.safari(cookie_file=src)
 mj = MozillaCookieJar(out)
@@ -554,7 +554,7 @@ yt-dlp --cookies /tmp/talkvid_local_cookies.txt --skip-download --no-playlist --
 Use this as the first message in the new chat:
 
 ```text
-Continue the TalkVid fetch work in /Users/semenvlasov/Documents/repos/lipsync_test.
-First read /Users/semenvlasov/Documents/repos/lipsync_test/docs/handoffs/2026-03-23-talkvid-youtube-fetch.md.
-Then inspect /Users/semenvlasov/Documents/repos/lipsync_test/training/output/talkvid_local_cycle/cycle.log and continue from the current runtime state without reverting unrelated changes.
+Continue the TalkVid fetch work in this repository checkout.
+First read docs/handoffs/2026-03-23-talkvid-youtube-fetch.md.
+Then inspect training/output/talkvid_local_cycle/cycle.log and continue from the current runtime state without reverting unrelated changes.
 ```

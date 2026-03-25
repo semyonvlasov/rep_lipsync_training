@@ -10,7 +10,9 @@ venv/
 
 training/output/
 training/data/_imports/
+training/data/_lazy_cache*/
 training/data/hdtf/
+training/data/talkvid/
 training/data/talkvid_local/
 training/data/talkvid_remote/
 training/data/faceclip_local/

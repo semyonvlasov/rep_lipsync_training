@@ -4,7 +4,7 @@ Updated: `2026-03-23 13:13:15 CET`
 
 Related handoffs:
 - [TalkVid fetch details](./2026-03-23-talkvid-youtube-fetch.md)
-- [Remote recovery notes](/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/RECOVERY_20260322.md)
+- Remote recovery notes live alongside the compact backup bundle at `training/backup/compact_remote_state_20260322/RECOVERY_20260322.md`.
 
 ## Scope
 
@@ -29,20 +29,20 @@ What was preserved:
 - generator teacher-ablation summaries
 
 Compact backup root:
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322`
+- `training/backup/compact_remote_state_20260322`
 
 Restore script:
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/restore_compact_remote_state_20260322.sh`
+- `training/backup/compact_remote_state_20260322/restore_compact_remote_state_20260322.sh`
 
 ### 2. Best current model choices
 
 Current winners from the last cloud run:
-- generator winner: `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/generator_full/generator_epoch008.pth`
+- generator winner: `training/backup/compact_remote_state_20260322/generator_full/generator_epoch008.pth`
 - late generator checkpoints kept for comparison:
-  - `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/generator_full/generator_epoch018.pth`
-  - `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/generator_full/generator_epoch019.pth`
+  - `training/backup/compact_remote_state_20260322/generator_full/generator_epoch018.pth`
+  - `training/backup/compact_remote_state_20260322/generator_full/generator_epoch019.pth`
 - best local SyncNet candidate:
-  - `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/syncnet_full_minus10/syncnet_epoch011.pth`
+  - `training/backup/compact_remote_state_20260322/syncnet_full_minus10/syncnet_epoch011.pth`
 
 Important conclusion from ablations:
 - official `official SyncNet` still beats the local SyncNet downstream as the teacher for generator training
@@ -67,8 +67,8 @@ Recent health signal:
 ### 1. Preprocess was upgraded for cloud use
 
 Files:
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/scripts/preprocess_dataset.py`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/scripts/process_hdtf_incremental.py`
+- `training/scripts/preprocess_dataset.py`
+- `training/scripts/process_hdtf_incremental.py`
 
 Changes:
 - added multi-worker incremental preprocessing over videos
@@ -96,7 +96,7 @@ Important nuance:
 ### 2. TalkVid downloader handles external interrupts more cleanly
 
 File:
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/scripts/download_talkvid.py`
+- `training/scripts/download_talkvid.py`
 
 Change:
 - if the process receives an external `KeyboardInterrupt`, it now exits cleanly without a huge traceback
@@ -106,10 +106,10 @@ Change:
 ### 3. Local TalkVid fetch pipeline remains the active data-growth path
 
 Main files:
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/scripts/download_talkvid.py`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/scripts/package_raw_batches.py`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/scripts/upload_batches_and_cleanup.py`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/run_local_talkvid_batch_cycle.sh`
+- `training/scripts/download_talkvid.py`
+- `training/scripts/package_raw_batches.py`
+- `training/scripts/upload_batches_and_cleanup.py`
+- `training/run_local_talkvid_batch_cycle.sh`
 
 Detailed fetch-specific notes are in:
 - [2026-03-23-talkvid-youtube-fetch.md](./2026-03-23-talkvid-youtube-fetch.md)
@@ -118,45 +118,45 @@ Detailed fetch-specific notes are in:
 
 ### Recovery and preserved cloud artifacts
 
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/RECOVERY_20260322.md`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/restore_compact_remote_state_20260322.sh`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/generator_full/`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/syncnet_full_minus10/`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/ablation3_official/`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/ablation3_local09/`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/ablation3_local11/`
+- `training/backup/compact_remote_state_20260322/RECOVERY_20260322.md`
+- `training/backup/compact_remote_state_20260322/restore_compact_remote_state_20260322.sh`
+- `training/backup/compact_remote_state_20260322/generator_full/`
+- `training/backup/compact_remote_state_20260322/syncnet_full_minus10/`
+- `training/backup/compact_remote_state_20260322/ablation3_official/`
+- `training/backup/compact_remote_state_20260322/ablation3_local09/`
+- `training/backup/compact_remote_state_20260322/ablation3_local11/`
 
 ### Current local TalkVid state
 
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/output/talkvid_local_cycle/cycle.log`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/data/talkvid_local/download_manifest.jsonl`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/data/talkvid_local/raw/`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/data/talkvid_local/archives/`
+- `training/output/talkvid_local_cycle/cycle.log`
+- `training/data/talkvid_local/download_manifest.jsonl`
+- `training/data/talkvid_local/raw/`
+- `training/data/talkvid_local/archives/`
 - `/tmp/talkvid_local_cookies.txt`
 
 ### Main preprocess code
 
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/scripts/preprocess_dataset.py`
-- `/Users/semenvlasov/Documents/repos/lipsync_test/training/scripts/process_hdtf_incremental.py`
+- `training/scripts/preprocess_dataset.py`
+- `training/scripts/process_hdtf_incremental.py`
 
 ## Recommended operator commands
 
 Watch the local TalkVid fetch:
 
 ```bash
-tail -f /Users/semenvlasov/Documents/repos/lipsync_test/training/output/talkvid_local_cycle/cycle.log
+tail -f training/output/talkvid_local_cycle/cycle.log
 ```
 
 Restore the preserved remote state onto a fresh machine:
 
 ```bash
-/Users/semenvlasov/Documents/repos/lipsync_test/training/backup/compact_remote_state_20260322/restore_compact_remote_state_20260322.sh <host> <port> /root
+training/backup/compact_remote_state_20260322/restore_compact_remote_state_20260322.sh <host> <port> /root
 ```
 
 Manually restart the local TalkVid loop:
 
 ```bash
-caffeinate -dimsu /bin/zsh /Users/semenvlasov/Documents/repos/lipsync_test/training/run_local_talkvid_batch_cycle.sh
+caffeinate -dimsu /bin/zsh training/run_local_talkvid_batch_cycle.sh
 ```
 
 ## Known risks and open questions
@@ -185,9 +185,9 @@ caffeinate -dimsu /bin/zsh /Users/semenvlasov/Documents/repos/lipsync_test/train
 Use this as the first message in the new chat:
 
 ```text
-Continue the lipsync work in /Users/semenvlasov/Documents/repos/lipsync_test.
-First read /Users/semenvlasov/Documents/repos/lipsync_test/docs/handoffs/2026-03-23-corp-account-transfer.md.
-Then read /Users/semenvlasov/Documents/repos/lipsync_test/docs/handoffs/2026-03-23-talkvid-youtube-fetch.md.
+Continue the lipsync work in this repository checkout.
+First read docs/handoffs/2026-03-23-corp-account-transfer.md.
+Then read docs/handoffs/2026-03-23-talkvid-youtube-fetch.md.
 After that:
 1. inspect the current TalkVid runtime in training/output/talkvid_local_cycle/cycle.log
 2. inspect the compact remote backup in training/backup/compact_remote_state_20260322

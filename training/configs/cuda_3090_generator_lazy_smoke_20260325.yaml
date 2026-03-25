@@ -1,0 +1,60 @@
+model:
+  img_size: 96
+  audio_encoder: "mel"
+  mel_steps: 16
+  base_channels: 32
+  predict_alpha: false
+
+audio:
+  sample_rate: 16000
+  n_fft: 800
+  hop_size: 200
+  win_size: 800
+  n_mels: 80
+  fmin: 55
+  fmax: 7600
+  preemphasis: 0.97
+
+syncnet:
+  epochs: 2
+  batch_size: 16
+  lr: 1.0e-4
+  T: 5
+  checkpoint: null
+
+generator:
+  epochs: 2
+  batch_size: 4
+  lr: 1.0e-4
+  lr_scheduler: "cosine"
+  loss:
+    l1: 1.0
+    perceptual: 0.0
+    sync: 0.2
+    sync_warmup_epochs: 0
+    gan: 0.0
+    temporal: 0.0
+    alpha_reg: 0.0
+
+data:
+  hdtf_root: "data/hdtf/processed"
+  talkvid_root: "data/talkvid/processed_medium"
+  fps: 25
+  num_workers: 4
+  crop_size: 256
+  lazy_cache_root: "data/_lazy_cache_smoke_20260325"
+  ffmpeg_bin: "ffmpeg"
+  materialize_timeout: 600
+  materialize_frames_size: 96
+  cache_size: 4
+  skip_bad_samples: true
+  persistent_workers: true
+  prefetch_factor: 2
+
+training:
+  device: "cuda"
+  mixed_precision: true
+  gradient_clip: 1.0
+  save_every: 1
+  sample_every: 1
+  output_dir: "output/lazy_smoke_20260325"
