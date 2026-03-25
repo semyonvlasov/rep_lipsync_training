@@ -71,6 +71,10 @@ def main():
         cache_size=cfg["data"].get("cache_size", 8),
         skip_bad_samples=cfg["data"].get("skip_bad_samples", True),
         speaker_allowlist=speaker_allowlist,
+        lazy_cache_root=cfg["data"].get("lazy_cache_root"),
+        ffmpeg_bin=cfg["data"].get("ffmpeg_bin", "ffmpeg"),
+        materialize_timeout=cfg["data"].get("materialize_timeout", 600),
+        materialize_frames_size=cfg["data"].get("materialize_frames_size", cfg["model"]["img_size"]),
     )
     loader_kwargs = {
         "batch_size": cfg["syncnet"]["batch_size"],

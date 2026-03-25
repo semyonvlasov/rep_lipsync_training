@@ -50,7 +50,7 @@ class AudioProcessor:
 
     def mel_chunks(self, mel, fps, mel_step_size=16):
         """Slice mel into per-frame chunks."""
-        mel_idx_mult = 80.0 / fps
+        mel_idx_mult = (self.sample_rate / float(self.hop_size)) / float(fps)
         chunks = []
         i = 0
         while True:
