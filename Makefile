@@ -8,6 +8,7 @@ PIP ?= $(PYTHON) -m pip
 SERVER_PY_REQUIREMENTS := $(TRAINING_ROOT)/requirements-server.txt
 
 SMOKE_LAZY_WORKFLOW ?= workflows/train/run_lazy_smoke_remote_20260325.sh
+SYNCNET_HOP_ABLATION_WORKFLOW ?= workflows/train/run_syncnet_hop_ablation_20260325.sh
 SYNCNET_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
 GENERATOR_CONFIG ?= configs/lipsync_cuda3090_hdtf_talkvid.yaml
 SYNCNET_TEACHER ?= ../models/official_syncnet/checkpoints/lipsync_expert.pth
@@ -24,12 +25,13 @@ ARTIFACTS_LOG_PATH ?= docs/training_runs/log.md
 ARTIFACTS_INCLUDE_MEDIA ?= 0
 ARTIFACTS_DRY_RUN ?= 0
 
-.PHONY: help server-setup smoke-lazy train-syncnet train-generator upload-training-artifacts
+.PHONY: help server-setup smoke-lazy syncnet-hop-ablation train-syncnet train-generator upload-training-artifacts
 
 help:
 	@echo "Available targets:"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
 	@echo "  make smoke-lazy      # run the lazy dataset smoke workflow"
+	@echo "  make syncnet-hop-ablation # run the hop160 vs hop200 SyncNet ablation workflow"
 	@echo "  make train-syncnet   # run scripts/train_syncnet.py with \$$SYNCNET_CONFIG"
 	@echo "  make train-generator # run scripts/train_generator.py with \$$GENERATOR_CONFIG"
 	@echo "  make upload-training-artifacts # upload a finished run to Drive and append the git log"
@@ -60,6 +62,9 @@ server-setup:
 
 smoke-lazy:
 	cd $(TRAINING_ROOT) && bash $(SMOKE_LAZY_WORKFLOW)
+
+syncnet-hop-ablation:
+	cd $(TRAINING_ROOT) && bash $(SYNCNET_HOP_ABLATION_WORKFLOW)
 
 train-syncnet:
 	cd $(TRAINING_ROOT) && $(PYTHON) scripts/train_syncnet.py \

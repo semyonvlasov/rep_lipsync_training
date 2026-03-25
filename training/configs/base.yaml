@@ -59,6 +59,7 @@ data:
   ffmpeg_bin: "ffmpeg"     # used for lazy mel extraction from faceclip mp4
   materialize_timeout: 600 # seconds to wait for another worker's cache build lock
   materialize_frames_size: null # optional override; defaults to model.img_size in train/check scripts
+  min_samples_per_speaker: 100 # dataset length floor = max(total_frames, speakers * this value)
 
 # --- Training ---
 training:

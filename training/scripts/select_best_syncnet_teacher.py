@@ -22,7 +22,7 @@ def metric_key(name, metrics):
         float(metrics.get("margin_mean", float("-inf"))),
         float(metrics.get("foreign_pairwise_acc", float("-inf"))),
         float(metrics.get("shifted_pairwise_acc", float("-inf"))),
-        1 if name == "official_syncnet" else 0,
+        1 if name in {"official_syncnet", "official_wav2lip"} else 0,
     )
 
 
@@ -51,7 +51,7 @@ def main():
         key=lambda item: metric_key(item[0], item[1]),
     )
 
-    if winner_name == "official_syncnet":
+    if winner_name in {"official_syncnet", "official_wav2lip"}:
         winner_path = args.official_checkpoint
         winner_kind = "official"
     else:

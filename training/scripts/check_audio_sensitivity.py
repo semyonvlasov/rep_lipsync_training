@@ -151,6 +151,7 @@ def build_dataset(cfg, speaker_allowlist=None):
         ffmpeg_bin=cfg["data"].get("ffmpeg_bin", "ffmpeg"),
         materialize_timeout=cfg["data"].get("materialize_timeout", 600),
         materialize_frames_size=cfg["data"].get("materialize_frames_size", cfg["model"]["img_size"]),
+        min_samples_per_speaker=cfg["data"].get("min_samples_per_speaker", 100),
     )
 
 

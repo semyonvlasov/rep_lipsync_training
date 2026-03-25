@@ -92,6 +92,7 @@ class LipSyncDataset(Dataset):
         ffmpeg_bin="ffmpeg",
         materialize_timeout=600,
         materialize_frames_size=None,
+        min_samples_per_speaker=100,
     ):
         self.img_size = img_size
         self.mel_step_size = mel_step_size
@@ -110,6 +111,7 @@ class LipSyncDataset(Dataset):
         self.materialize_frames_size = self._normalize_materialize_frames_size(
             materialize_frames_size
         )
+        self.min_samples_per_speaker = max(int(min_samples_per_speaker), 0)
         self.audio_cfg = dict(audio_cfg or {})
         self._audio_proc = AudioProcessor(self.audio_cfg) if self.audio_cfg else None
 
@@ -419,7 +421,7 @@ class LipSyncDataset(Dataset):
         return self._build_generator_sample(frames, mel_chunks, start, ref_start)
 
     def __len__(self):
-        return max(self._total_frames, len(self.speakers) * 100)
+        return max(self._total_frames, len(self.speakers) * self.min_samples_per_speaker)
 
     def _lock_path(self, target_path):
         return target_path + ".lock"

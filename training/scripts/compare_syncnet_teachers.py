@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 """
-Compare multiple SyncNet teachers on holdout processed videos.
+Compare multiple SyncNet teachers on holdout videos.
 
-Holdout is defined as:
-    processed speaker dirs - speaker snapshot used for local SyncNet training
+Supports:
+  - materialized processed roots with frames.npy + mel.npy
+  - lazy faceclip roots with mp4 + json, materialized on demand
 
-Metrics are computed on the same randomly sampled windows for every teacher:
-  1. positive vs shifted-audio negative within the same clip
-  2. positive vs foreign-audio negative from a different holdout clip
-
-The script reports threshold-free ranking quality:
-  - pairwise accuracy: fraction of times pos_score > neg_score
-  - mean margin: mean(pos_score - neg_score)
+Each local teacher is evaluated with its own checkpoint config, so changes like
+`hop_size=160` and `mel_steps=20` are respected during comparison.
 """
 
 import argparse
@@ -20,7 +16,6 @@ import json
 import os
 import random
 import sys
-from collections import OrderedDict
 
 import numpy as np
 import torch
@@ -29,6 +24,20 @@ import torch.nn.functional as F
 
 TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TRAINING_ROOT)
+sys.path.insert(0, TRAINING_ROOT)
+from data import LipSyncDataset
+
+
+DEFAULT_OFFICIAL_AUDIO_CFG = {
+    "sample_rate": 16000,
+    "n_fft": 800,
+    "hop_size": 200,
+    "win_size": 800,
+    "n_mels": 80,
+    "fmin": 55,
+    "fmax": 7600,
+    "preemphasis": 0.97,
+}
 
 
 def load_snapshot(path):
@@ -41,136 +50,6 @@ def load_allowlist(path):
         return None
     with open(path) as f:
         return {line.strip() for line in f if line.strip()}
-
-
-def load_meta(speaker_dir):
-    meta_path = os.path.join(speaker_dir, "bbox.json")
-    if not os.path.exists(meta_path):
-        return {}
-    with open(meta_path) as f:
-        return json.load(f)
-
-
-def build_mel_chunks(mel, fps, mel_step_size=16):
-    mel_idx_mult = 80.0 / float(fps)
-    chunks = []
-    n_frames = max(1, int(np.ceil(mel.shape[1] / mel_idx_mult)))
-    for i in range(n_frames):
-        start = int(i * mel_idx_mult)
-        end = start + mel_step_size
-        if mel.shape[1] < mel_step_size:
-            chunk = np.pad(
-                mel,
-                ((0, 0), (0, mel_step_size - mel.shape[1])),
-                mode="edge",
-            )
-        elif end > mel.shape[1]:
-            chunk = mel[:, -mel_step_size:]
-        else:
-            chunk = mel[:, start:end]
-        chunks.append(chunk.astype(np.float32, copy=False))
-    return chunks
-
-
-class HoldoutSet:
-    def __init__(self, processed_roots, snapshot_path, fps=25, cache_size=16, speaker_allowlist=None):
-        self.processed_roots = processed_roots
-        self.snapshot = load_snapshot(snapshot_path)
-        self.speaker_allowlist = speaker_allowlist
-        self.fps = fps
-        self.cache = OrderedDict()
-        self.cache_size = max(int(cache_size), 0)
-        self.items = self._collect_items()
-
-    def _collect_items(self):
-        items = []
-        seen = {}
-        duplicates = []
-        for processed_root in self.processed_roots:
-            for name in sorted(os.listdir(processed_root)):
-                speaker_dir = os.path.join(processed_root, name)
-                if not os.path.isdir(speaker_dir):
-                    continue
-                if self.speaker_allowlist is not None and name not in self.speaker_allowlist:
-                    continue
-                if name in self.snapshot:
-                    continue
-                meta = load_meta(speaker_dir)
-                if meta.get("bad_sample", False):
-                    continue
-                frames_path = os.path.join(speaker_dir, "frames.npy")
-                mel_path = os.path.join(speaker_dir, "mel.npy")
-                if not (os.path.exists(frames_path) and os.path.exists(mel_path)):
-                    continue
-                if name in seen:
-                    duplicates.append((name, seen[name], processed_root))
-                    continue
-                seen[name] = processed_root
-                frames = np.load(frames_path, mmap_mode="r")
-                mel = np.load(mel_path, mmap_mode="r")
-                mel_chunks = build_mel_chunks(mel, self.fps)
-                n_frames = min(int(frames.shape[0]), len(mel_chunks))
-                if n_frames < 12:
-                    continue
-                items.append({
-                    "name": name,
-                    "dir": speaker_dir,
-                    "processed_root": processed_root,
-                    "n_frames": n_frames,
-                })
-        if duplicates:
-            detail = "\n".join(
-                f"  - {name}: {root_a} vs {root_b}"
-                for name, root_a, root_b in duplicates[:20]
-            )
-            raise RuntimeError(
-                "Duplicate speaker names across processed roots would make holdout comparison ambiguous:\n"
-                f"{detail}"
-            )
-        return items
-
-    def _remember(self, key, value):
-        self.cache[key] = value
-        while self.cache_size and len(self.cache) > self.cache_size:
-            self.cache.popitem(last=False)
-
-    def load_item(self, item):
-        key = item["dir"]
-        if key in self.cache:
-            value = self.cache.pop(key)
-            self.cache[key] = value
-            return value
-        frames = np.load(os.path.join(item["dir"], "frames.npy"), mmap_mode="r")
-        mel = np.load(os.path.join(item["dir"], "mel.npy"))
-        mel_chunks = build_mel_chunks(mel, self.fps)
-        n_frames = min(int(frames.shape[0]), len(mel_chunks))
-        value = (frames, mel_chunks, n_frames)
-        self._remember(key, value)
-        return value
-
-
-def resize_face(frame, size=96):
-    import cv2
-
-    if frame.shape[0] != size or frame.shape[1] != size:
-        frame = cv2.resize(frame, (size, size))
-    return frame.astype(np.float32) / 255.0
-
-
-def build_visual_window(frames, start, T, img_size=96):
-    window = [resize_face(frames[start + t], img_size) for t in range(T)]
-    lowers = [face[img_size // 2 :, :, :] for face in window]
-    visual = np.concatenate([lower.transpose(2, 0, 1) for lower in lowers], axis=0)
-    return visual.astype(np.float32, copy=False)
-
-
-def build_official_audio(mel_chunks, start):
-    return mel_chunks[start][np.newaxis, np.newaxis]
-
-
-def build_local_audio(mel_chunks, start, T):
-    mel_concat = np.concatenate([mel_chunks[start + t] for t in range(T)], axis=1)
-    return mel_concat[np.newaxis, np.newaxis]
 
 
 def load_official_syncnet_class():
@@ -201,7 +80,7 @@ def load_local_syncnet_class():
     return SyncNet
 
 
-def load_teacher(spec, device, T):
+def load_teacher_model(spec, device):
     if spec["kind"] == "official":
         SyncNet = load_official_syncnet_class()
         model = SyncNet().to(device)
@@ -210,13 +89,91 @@ def load_teacher(spec, device, T):
         model.load_state_dict(state_dict)
     else:
         SyncNet = load_local_syncnet_class()
-        model = SyncNet(T=T).to(device)
+        model = SyncNet(T=spec["T"]).to(device)
         ck = torch.load(spec["checkpoint"], map_location=device, weights_only=False)
         model.load_state_dict(ck["model"])
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
     return model
+
+
+def load_local_teacher_spec(checkpoint_path, default_T):
+    ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    cfg = ck.get("config", {})
+    spec = {
+        "name": os.path.splitext(os.path.basename(checkpoint_path))[0],
+        "kind": "local",
+        "checkpoint": checkpoint_path,
+        "audio_cfg": cfg.get("audio", DEFAULT_OFFICIAL_AUDIO_CFG),
+        "mel_steps": int(cfg.get("model", {}).get("mel_steps", 16)),
+        "img_size": int(cfg.get("model", {}).get("img_size", 96)),
+        "T": int(cfg.get("syncnet", {}).get("T", default_T)),
+    }
+    return spec
+
+
+def build_dataset_for_spec(spec, args, speaker_allowlist):
+    return LipSyncDataset(
+        roots=args.processed_root,
+        img_size=spec["img_size"],
+        mel_step_size=spec["mel_steps"],
+        fps=args.fps,
+        audio_cfg=spec["audio_cfg"],
+        syncnet_T=spec["T"],
+        mode="syncnet",
+        cache_size=args.cache_size,
+        skip_bad_samples=True,
+        speaker_allowlist=speaker_allowlist,
+        lazy_cache_root=args.lazy_cache_root,
+        ffmpeg_bin=args.ffmpeg_bin,
+        materialize_timeout=args.materialize_timeout,
+        materialize_frames_size=args.materialize_frames_size or spec["img_size"],
+        min_samples_per_speaker=0,
+    )
+
+
+def build_holdout_items(dataset, snapshot_names):
+    items = []
+    for key in dataset.speakers:
+        entry = dataset._entries[key]
+        if entry["name"] in snapshot_names:
+            continue
+        frame_count = dataset._entry_frame_count(entry)
+        if frame_count < dataset.syncnet_T + 5:
+            continue
+        items.append(
+            {
+                "name": entry["name"],
+                "key": key,
+                "n_frames": frame_count,
+            }
+        )
+    return items
+
+
+def resize_face(frame, size=96):
+    import cv2
+
+    if frame.shape[0] != size or frame.shape[1] != size:
+        frame = cv2.resize(frame, (size, size))
+    return frame.astype(np.float32) / 255.0
+
+
+def build_visual_window(frames, start, T, img_size=96):
+    window = [resize_face(frames[start + t], img_size) for t in range(T)]
+    lowers = [face[img_size // 2 :, :, :] for face in window]
+    visual = np.concatenate([lower.transpose(2, 0, 1) for lower in lowers], axis=0)
+    return visual.astype(np.float32, copy=False)
+
+
+def build_official_audio(mel_chunks, start):
+    return mel_chunks[start][np.newaxis, np.newaxis]
+
+
+def build_local_audio(mel_chunks, start, T):
+    mel_concat = np.concatenate([mel_chunks[start + t] for t in range(T)], axis=1)
+    return mel_concat[np.newaxis, np.newaxis]
 
 
 def score_teacher(spec, model, visual_np, pos_audio_np, neg_audio_np, device):
@@ -236,88 +193,123 @@ def score_teacher(spec, model, visual_np, pos_audio_np, neg_audio_np, device):
     return pos_score, neg_score
 
 
-def build_sample_pairs(holdout, T, samples, seed):
+def build_sample_pairs(items, T, samples, seed):
     rng = random.Random(seed)
     records = []
-    if len(holdout.items) < 2:
+    if len(items) < 2:
         raise RuntimeError("Need at least 2 valid holdout speakers for comparison")
 
+    name_to_item = {item["name"]: item for item in items}
+
     for sample_idx in range(samples):
-        item = rng.choice(holdout.items)
-        frames, mel_chunks, n_frames = holdout.load_item(item)
+        item = rng.choice(items)
+        n_frames = int(item["n_frames"])
         start = rng.randint(0, n_frames - T - 1)
 
         offset = rng.choice([-1, 1]) * rng.randint(5, max(5, n_frames // 2))
         shifted_start = (start + offset) % max(1, n_frames - T)
 
-        other = rng.choice([x for x in holdout.items if x["name"] != item["name"]])
-        _, other_mel_chunks, other_n_frames = holdout.load_item(other)
+        other = rng.choice([x for x in items if x["name"] != item["name"]])
+        other_n_frames = int(other["n_frames"])
         other_start = rng.randint(0, other_n_frames - T - 1)
 
-        records.append({
-            "sample_idx": sample_idx,
-            "speaker": item["name"],
-            "start": start,
-            "shifted_start": shifted_start,
-            "other_speaker": other["name"],
-            "other_start": other_start,
-        })
-    return records
+        records.append(
+            {
+                "sample_idx": sample_idx,
+                "speaker": item["name"],
+                "start": start,
+                "shifted_start": shifted_start,
+                "other_speaker": other["name"],
+                "other_start": other_start,
+            }
+        )
+
+    return records, name_to_item
 
 
 def evaluate_teachers(args):
     device = torch.device(args.device)
-    holdout = HoldoutSet(
-        processed_roots=args.processed_root,
-        snapshot_path=args.speaker_snapshot,
-        fps=args.fps,
-        cache_size=args.cache_size,
-        speaker_allowlist=load_allowlist(args.speaker_list),
-    )
-    if not holdout.items:
-        raise RuntimeError("No valid holdout speakers found after excluding the snapshot and bad samples")
+    snapshot_names = load_snapshot(args.speaker_snapshot)
+    requested_holdout = load_allowlist(args.speaker_list)
 
-    sample_records = build_sample_pairs(holdout, args.T, args.samples, args.seed)
+    official_spec = {
+        "name": "official_wav2lip",
+        "kind": "official",
+        "checkpoint": args.official_checkpoint,
+        "audio_cfg": {
+            "sample_rate": args.official_sample_rate,
+            "n_fft": args.official_n_fft,
+            "hop_size": args.official_hop_size,
+            "win_size": args.official_win_size,
+            "n_mels": args.official_n_mels,
+            "fmin": args.official_fmin,
+            "fmax": args.official_fmax,
+            "preemphasis": args.official_preemphasis,
+        },
+        "mel_steps": int(args.official_mel_steps),
+        "img_size": int(args.official_img_size),
+        "T": int(args.T),
+    }
 
-    teacher_specs = [{"name": "official_syncnet", "kind": "official", "checkpoint": args.official_checkpoint}]
-    for ckpt in args.checkpoints:
-        teacher_specs.append({
-            "name": os.path.splitext(os.path.basename(ckpt))[0],
-            "kind": "local",
-            "checkpoint": ckpt,
-        })
+    local_specs = [load_local_teacher_spec(path, default_T=args.T) for path in args.checkpoints]
+    teacher_specs = [official_spec] + local_specs
+
+    if any(spec["T"] != args.T for spec in teacher_specs):
+        bad = {spec["name"]: spec["T"] for spec in teacher_specs if spec["T"] != args.T}
+        raise RuntimeError(
+            f"All teacher checkpoints must match --T={args.T} for a fair compare, got {bad}"
+        )
+
+    base_dataset = build_dataset_for_spec(official_spec, args, requested_holdout)
+    holdout_items = build_holdout_items(base_dataset, snapshot_names)
+    if requested_holdout is not None:
+        requested_missing = sorted(requested_holdout - {item["name"] for item in holdout_items})
+        if requested_missing:
+            print(f"missing_requested_holdout={requested_missing[:20]}")
+    if not holdout_items:
+        raise RuntimeError("No valid holdout speakers found after excluding the training snapshot")
+
+    sample_records, item_by_name = build_sample_pairs(holdout_items, args.T, args.samples, args.seed)
+    holdout_names = sorted(item["name"] for item in holdout_items)
+
+    datasets = {
+        spec["name"]: build_dataset_for_spec(spec, args, holdout_names)
+        for spec in teacher_specs
+    }
 
     results = {
         "processed_roots": args.processed_root,
-        "holdout_total": len(holdout.items),
+        "holdout_total": len(holdout_items),
         "samples": len(sample_records),
         "teachers": {},
         "sample_records": sample_records,
+        "holdout_names": holdout_names,
     }
 
     for spec in teacher_specs:
-        model = load_teacher(spec, device, args.T)
+        model = load_teacher_model(spec, device)
+        dataset = datasets[spec["name"]]
         shifted_margins = []
         shifted_hits = 0
         foreign_margins = []
         foreign_hits = 0
-
         per_sample = []
-        for record in sample_records:
-            item = next(x for x in holdout.items if x["name"] == record["speaker"])
-            other = next(x for x in holdout.items if x["name"] == record["other_speaker"])
-            frames, mel_chunks, _ = holdout.load_item(item)
-            _, other_mel_chunks, _ = holdout.load_item(other)
 
-            visual = build_visual_window(frames, record["start"], args.T, img_size=args.img_size)
+        for record in sample_records:
+            speaker_key = dataset._entry_name_to_key[record["speaker"]]
+            other_key = dataset._entry_name_to_key[record["other_speaker"]]
+            frames, mel_chunks, _ = dataset._load_speaker(speaker_key)
+            _, other_mel_chunks, _ = dataset._load_speaker(other_key)
+
+            visual = build_visual_window(frames, record["start"], spec["T"], img_size=spec["img_size"])
             if spec["kind"] == "official":
                 pos_audio = build_official_audio(mel_chunks, record["start"])
                 shifted_audio = build_official_audio(mel_chunks, record["shifted_start"])
                 foreign_audio = build_official_audio(other_mel_chunks, record["other_start"])
             else:
-                pos_audio = build_local_audio(mel_chunks, record["start"], args.T)
-                shifted_audio = build_local_audio(mel_chunks, record["shifted_start"], args.T)
-                foreign_audio = build_local_audio(other_mel_chunks, record["other_start"], args.T)
+                pos_audio = build_local_audio(mel_chunks, record["start"], spec["T"])
+                shifted_audio = build_local_audio(mel_chunks, record["shifted_start"], spec["T"])
+                foreign_audio = build_local_audio(other_mel_chunks, record["other_start"], spec["T"])
 
             pos_score, shifted_score = score_teacher(spec, model, visual, pos_audio, shifted_audio, device)
             _, foreign_score = score_teacher(spec, model, visual, pos_audio, foreign_audio, device)
@@ -328,18 +320,26 @@ def evaluate_teachers(args):
             foreign_margins.append(foreign_margin)
             shifted_hits += int(shifted_margin > 0)
             foreign_hits += int(foreign_margin > 0)
-            per_sample.append({
-                "sample_idx": record["sample_idx"],
-                "speaker": record["speaker"],
-                "other_speaker": record["other_speaker"],
-                "pos_score": pos_score,
-                "shifted_score": shifted_score,
-                "foreign_score": foreign_score,
-                "shifted_margin": shifted_margin,
-                "foreign_margin": foreign_margin,
-            })
+            per_sample.append(
+                {
+                    "sample_idx": record["sample_idx"],
+                    "speaker": record["speaker"],
+                    "other_speaker": record["other_speaker"],
+                    "pos_score": pos_score,
+                    "shifted_score": shifted_score,
+                    "foreign_score": foreign_score,
+                    "shifted_margin": shifted_margin,
+                    "foreign_margin": foreign_margin,
+                }
+            )
 
         results["teachers"][spec["name"]] = {
+            "kind": spec["kind"],
+            "checkpoint": spec["checkpoint"],
+            "audio_cfg": spec["audio_cfg"],
+            "mel_steps": spec["mel_steps"],
+            "img_size": spec["img_size"],
+            "T": spec["T"],
             "shifted_pairwise_acc": shifted_hits / max(1, len(sample_records)),
             "shifted_margin_mean": float(np.mean(shifted_margins)),
             "foreign_pairwise_acc": foreign_hits / max(1, len(sample_records)),
@@ -359,14 +359,28 @@ def main():
     parser.add_argument("--official-checkpoint", required=True)
     parser.add_argument("--checkpoints", nargs="+", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--speaker-list", default=None)
+    parser.add_argument("--speaker-list", default=None, help="Optional unseen holdout allowlist")
     parser.add_argument("--samples", type=int, default=32)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--fps", type=int, default=25)
     parser.add_argument("--T", type=int, default=5)
-    parser.add_argument("--img-size", type=int, default=96)
     parser.add_argument("--cache-size", type=int, default=16)
+    parser.add_argument("--lazy-cache-root", default=None)
+    parser.add_argument("--ffmpeg-bin", default="ffmpeg")
+    parser.add_argument("--materialize-timeout", type=int, default=600)
+    parser.add_argument("--materialize-frames-size", default=None)
+    parser.add_argument("--official-img-size", type=int, default=96)
+    parser.add_argument("--img-size", dest="official_img_size", type=int, help="Backward-compatible alias for --official-img-size")
+    parser.add_argument("--official-mel-steps", type=int, default=16)
+    parser.add_argument("--official-sample-rate", type=int, default=16000)
+    parser.add_argument("--official-n-fft", type=int, default=800)
+    parser.add_argument("--official-hop-size", type=int, default=200)
+    parser.add_argument("--official-win-size", type=int, default=800)
+    parser.add_argument("--official-n-mels", type=int, default=80)
+    parser.add_argument("--official-fmin", type=float, default=55)
+    parser.add_argument("--official-fmax", type=float, default=7600)
+    parser.add_argument("--official-preemphasis", type=float, default=0.97)
     args = parser.parse_args()
 
     results = evaluate_teachers(args)
@@ -379,10 +393,10 @@ def main():
     for name, metrics in results["teachers"].items():
         print(
             f"{name}: "
-            f"shift_acc={metrics['shifted_pairwise_acc']:.3f}, "
-            f"shift_margin={metrics['shifted_margin_mean']:.4f}, "
-            f"foreign_acc={metrics['foreign_pairwise_acc']:.3f}, "
-            f"foreign_margin={metrics['foreign_margin_mean']:.4f}, "
+            f"kind={metrics['kind']}, "
+            f"hop={metrics['audio_cfg']['hop_size']}, "
+            f"mel_steps={metrics['mel_steps']}, "
+            f"audio_width={metrics['mel_steps'] if metrics['kind'] == 'official' else metrics['mel_steps'] * metrics['T']}, "
             f"acc_mean={metrics['pairwise_acc_mean']:.3f}, "
             f"margin_mean={metrics['margin_mean']:.4f}"
         )
