@@ -11,7 +11,7 @@ SMOKE_LAZY_WORKFLOW ?= workflows/train/run_lazy_smoke_remote_20260325.sh
 SYNCNET_HOP_ABLATION_WORKFLOW ?= workflows/train/run_syncnet_hop_ablation_20260325.sh
 SYNCNET_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
 GENERATOR_CONFIG ?= configs/lipsync_cuda3090_hdtf_talkvid.yaml
-SYNCNET_TEACHER ?= ../models/official_syncnet/checkpoints/lipsync_expert.pth
+SYNCNET_TEACHER ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 SYNCNET_RESUME ?=
 GENERATOR_RESUME ?=
 SPEAKER_LIST ?=
@@ -40,7 +40,7 @@ help:
 	@echo "  PYTHON=python3"
 	@echo "  SYNCNET_CONFIG=configs/syncnet_cuda3090_medium.yaml"
 	@echo "  GENERATOR_CONFIG=configs/lipsync_cuda3090_hdtf_talkvid.yaml"
-	@echo "  SYNCNET_TEACHER=../models/official_syncnet/checkpoints/lipsync_expert.pth"
+	@echo "  SYNCNET_TEACHER=../../models/wav2lip/checkpoints/lipsync_expert.pth"
 	@echo "  SYNCNET_RESUME=/abs/or/rel/checkpoint.pth"
 	@echo "  GENERATOR_RESUME=/abs/or/rel/checkpoint.pth"
 	@echo "  SPEAKER_LIST=/abs/or/rel/speakers.txt"

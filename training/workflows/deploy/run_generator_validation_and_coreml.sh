@@ -9,7 +9,7 @@ cd "$TRAINING_ROOT"
 PYTHON=${PYTHON:-/opt/homebrew/Caskroom/miniforge/base/envs/musetalk/bin/python}
 export KMP_DUPLICATE_LIB_OK=TRUE
 
-SYNCNET_PATH="../models/official_syncnet/checkpoints/lipsync_expert.pth"
+SYNCNET_PATH="../../models/wav2lip/checkpoints/lipsync_expert.pth"
 
 echo "=== Step 1: Download 20 HDTF videos ==="
 $PYTHON scripts/download_hdtf.py --output data/hdtf --max-videos 20
