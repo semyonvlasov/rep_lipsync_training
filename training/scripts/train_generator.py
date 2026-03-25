@@ -130,7 +130,13 @@ def prepare_local_syncnet_audio(indiv_mels):
 def load_syncnet_teacher(checkpoint_path, device, syncnet_T):
     ck = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if isinstance(ck, dict) and "model" in ck:
-        model = LocalSyncNet(T=syncnet_T).to(device)
+        teacher_cfg = ck.get("config", {})
+        teacher_syncnet_T = int(teacher_cfg.get("syncnet", {}).get("T", syncnet_T))
+        teacher_model_cfg = teacher_cfg.get("model", {})
+        model = LocalSyncNet(
+            T=teacher_syncnet_T,
+            audio_temporal_kernels=teacher_model_cfg.get("audio_temporal_kernels"),
+        ).to(device)
         model.load_state_dict(ck["model"])
         kind = "local"
         epoch = ck.get("epoch", "?")

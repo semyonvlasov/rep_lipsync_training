@@ -89,7 +89,10 @@ def load_teacher_model(spec, device):
         model.load_state_dict(state_dict)
     else:
         SyncNet = load_local_syncnet_class()
-        model = SyncNet(T=spec["T"]).to(device)
+        model = SyncNet(
+            T=spec["T"],
+            audio_temporal_kernels=spec.get("model_cfg", {}).get("audio_temporal_kernels"),
+        ).to(device)
         ck = torch.load(spec["checkpoint"], map_location=device, weights_only=False)
         model.load_state_dict(ck["model"])
     model.eval()
@@ -107,6 +110,7 @@ def load_local_teacher_spec(checkpoint_path, default_T):
         "name": f"{run_dir}_{ckpt_name}",
         "kind": "local",
         "checkpoint": checkpoint_path,
+        "model_cfg": cfg.get("model", {}),
         "audio_cfg": cfg.get("audio", DEFAULT_OFFICIAL_AUDIO_CFG),
         "mel_steps": int(cfg.get("model", {}).get("mel_steps", 16)),
         "img_size": int(cfg.get("model", {}).get("img_size", 96)),

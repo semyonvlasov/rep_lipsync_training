@@ -5,6 +5,7 @@ model:
   img_size: 192            # Output face resolution (96, 128, 192, 256)
   audio_encoder: "mel"     # mel spectrogram input
   mel_steps: 16            # mel frames per video frame (same as the reference setup)
+  audio_temporal_kernels: null # optional 8-entry list, widens audio conv kernels only along time
   base_channels: 32        # base channel width (scale up for larger resolution)
   predict_alpha: false     # disable until blending is wired into the training target
 

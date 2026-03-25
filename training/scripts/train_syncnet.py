@@ -94,7 +94,10 @@ def main():
     loader = DataLoader(dataset, **loader_kwargs)
 
     # Model
-    model = SyncNet(T=cfg["syncnet"]["T"]).to(device)
+    model = SyncNet(
+        T=cfg["syncnet"]["T"],
+        audio_temporal_kernels=cfg["model"].get("audio_temporal_kernels"),
+    ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["syncnet"]["lr"])
     use_amp = cfg["training"].get("mixed_precision", False) and device == "cuda"
     scaler = GradScaler(enabled=use_amp) if device == "cuda" else None
