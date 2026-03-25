@@ -101,8 +101,10 @@ def load_teacher_model(spec, device):
 def load_local_teacher_spec(checkpoint_path, default_T):
     ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     cfg = ck.get("config", {})
+    ckpt_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+    run_dir = os.path.basename(os.path.dirname(os.path.dirname(checkpoint_path)))
     spec = {
-        "name": os.path.splitext(os.path.basename(checkpoint_path))[0],
+        "name": f"{run_dir}_{ckpt_name}",
         "kind": "local",
         "checkpoint": checkpoint_path,
         "audio_cfg": cfg.get("audio", DEFAULT_OFFICIAL_AUDIO_CFG),

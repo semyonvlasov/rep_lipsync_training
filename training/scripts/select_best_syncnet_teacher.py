@@ -16,6 +16,12 @@ import json
 import os
 
 
+def checkpoint_names(path):
+    ckpt_name = os.path.splitext(os.path.basename(path))[0]
+    run_dir = os.path.basename(os.path.dirname(os.path.dirname(path)))
+    return {ckpt_name, f"{run_dir}_{ckpt_name}"}
+
+
 def metric_key(name, metrics):
     return (
         float(metrics.get("pairwise_acc_mean", float("-inf"))),
@@ -41,10 +47,10 @@ def main():
     if not teachers:
         raise RuntimeError(f"No teacher metrics found in {args.compare_json}")
 
-    checkpoint_by_name = {
-        os.path.splitext(os.path.basename(path))[0]: path
-        for path in args.checkpoints
-    }
+    checkpoint_by_name = {}
+    for path in args.checkpoints:
+        for name in checkpoint_names(path):
+            checkpoint_by_name[name] = path
 
     winner_name, winner_metrics = max(
         teachers.items(),
