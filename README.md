@@ -66,5 +66,36 @@ purpose. They should be reviewed one by one before being added:
 
 1. Put the official checkpoint under:
    `models/official_syncnet/checkpoints/lipsync_expert.pth`
-2. Install Python deps used by the scripts.
-3. Use the workflows in `training/workflows/*` as the entrypoints.
+2. On a fresh remote Linux/Vast server run:
+   `make server-setup`
+3. Use one of the top-level make targets:
+   `make smoke-lazy`
+   `make train-syncnet`
+   `make train-generator`
+
+## Make targets
+
+- `make server-setup`
+  Installs the remote server dependencies used by the current training flow:
+  `ffmpeg`, `libsndfile1`, `rsync`, `rclone`, `git`, `make`, plus the Python
+  packages listed in `training/requirements-server.txt`.
+- `make smoke-lazy`
+  Runs the lazy-dataset smoke workflow in
+  `training/workflows/train/run_lazy_smoke_remote_20260325.sh`.
+- `make train-syncnet`
+  Runs `training/scripts/train_syncnet.py` with
+  `training/configs/syncnet_cuda3090_medium.yaml` by default.
+- `make train-generator`
+  Runs `training/scripts/train_generator.py` with
+  `training/configs/lipsync_cuda3090_hdtf_talkvid.yaml` by default and points
+  at `models/official_syncnet/checkpoints/lipsync_expert.pth` unless
+  overridden.
+
+Useful overrides:
+
+- `SYNCNET_CONFIG=...`
+- `GENERATOR_CONFIG=...`
+- `SYNCNET_TEACHER=...`
+- `SYNCNET_RESUME=...`
+- `GENERATOR_RESUME=...`
+- `SPEAKER_LIST=...`

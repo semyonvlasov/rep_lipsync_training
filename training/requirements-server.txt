@@ -1,0 +1,7 @@
+gdown
+librosa
+opencv-python-headless
+PyYAML
+scipy
+soundfile
+tqdm
