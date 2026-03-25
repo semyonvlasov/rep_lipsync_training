@@ -193,7 +193,33 @@ def score_teacher(spec, model, visual_np, pos_audio_np, neg_audio_np, device):
     return pos_score, neg_score
 
 
-def build_sample_pairs(items, T, samples, seed):
+def compute_common_max_starts(items, datasets, teacher_specs):
+    valid_items = []
+    for item in items:
+        max_start = None
+        for spec in teacher_specs:
+            dataset = datasets[spec["name"]]
+            key = dataset._entry_name_to_key[item["name"]]
+            frames, mel_chunks, _ = dataset._load_speaker(key)
+            frame_limit = len(frames) - spec["T"]
+            if spec["kind"] == "official":
+                audio_limit = len(mel_chunks) - 1
+            else:
+                audio_limit = len(mel_chunks) - spec["T"]
+            spec_max_start = min(frame_limit, audio_limit)
+            max_start = spec_max_start if max_start is None else min(max_start, spec_max_start)
+
+        if max_start is None or max_start < 1:
+            continue
+
+        enriched = dict(item)
+        enriched["max_start"] = int(max_start)
+        valid_items.append(enriched)
+
+    return valid_items
+
+
+def build_sample_pairs(items, samples, seed):
     rng = random.Random(seed)
     records = []
     if len(items) < 2:
@@ -203,15 +229,16 @@ def build_sample_pairs(items, T, samples, seed):
 
     for sample_idx in range(samples):
         item = rng.choice(items)
-        n_frames = int(item["n_frames"])
-        start = rng.randint(0, n_frames - T - 1)
+        max_start = int(item["max_start"])
+        start = rng.randint(0, max_start)
 
-        offset = rng.choice([-1, 1]) * rng.randint(5, max(5, n_frames // 2))
-        shifted_start = (start + offset) % max(1, n_frames - T)
+        offset = rng.choice([-1, 1]) * rng.randint(1, max_start)
+        shifted_start = (start + offset) % (max_start + 1)
+        if shifted_start == start:
+            shifted_start = (start + 1) % (max_start + 1)
 
         other = rng.choice([x for x in items if x["name"] != item["name"]])
-        other_n_frames = int(other["n_frames"])
-        other_start = rng.randint(0, other_n_frames - T - 1)
+        other_start = rng.randint(0, int(other["max_start"]))
 
         records.append(
             {
@@ -269,21 +296,22 @@ def evaluate_teachers(args):
     if not holdout_items:
         raise RuntimeError("No valid holdout speakers found after excluding the training snapshot")
 
-    sample_records, item_by_name = build_sample_pairs(holdout_items, args.T, args.samples, args.seed)
     holdout_names = sorted(item["name"] for item in holdout_items)
 
     datasets = {
         spec["name"]: build_dataset_for_spec(spec, args, holdout_names)
         for spec in teacher_specs
     }
+    valid_holdout_items = compute_common_max_starts(holdout_items, datasets, teacher_specs)
+    sample_records, item_by_name = build_sample_pairs(valid_holdout_items, args.samples, args.seed)
 
     results = {
         "processed_roots": args.processed_root,
-        "holdout_total": len(holdout_items),
+        "holdout_total": len(valid_holdout_items),
         "samples": len(sample_records),
         "teachers": {},
         "sample_records": sample_records,
-        "holdout_names": holdout_names,
+        "holdout_names": sorted(item["name"] for item in valid_holdout_items),
     }
 
     for spec in teacher_specs:
