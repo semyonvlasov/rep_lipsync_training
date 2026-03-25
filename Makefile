@@ -14,8 +14,17 @@ SYNCNET_TEACHER ?= ../models/official_syncnet/checkpoints/lipsync_expert.pth
 SYNCNET_RESUME ?=
 GENERATOR_RESUME ?=
 SPEAKER_LIST ?=
+ARTIFACTS_OUTPUT_DIR ?=
+ARTIFACTS_RUN_KIND ?= auto
+ARTIFACTS_RUN_NAME ?=
+ARTIFACTS_CONFIG_PATH ?=
+ARTIFACTS_REMOTE ?= gdrive:
+ARTIFACTS_DRIVE_ROOT_ID ?= 1y1P-LI3YTPV65zpHXMSrNYsykN2-s5Pv
+ARTIFACTS_LOG_PATH ?= docs/training_runs/log.md
+ARTIFACTS_INCLUDE_MEDIA ?= 0
+ARTIFACTS_DRY_RUN ?= 0
 
-.PHONY: help server-setup smoke-lazy train-syncnet train-generator
+.PHONY: help server-setup smoke-lazy train-syncnet train-generator upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -23,6 +32,7 @@ help:
 	@echo "  make smoke-lazy      # run the lazy dataset smoke workflow"
 	@echo "  make train-syncnet   # run scripts/train_syncnet.py with \$$SYNCNET_CONFIG"
 	@echo "  make train-generator # run scripts/train_generator.py with \$$GENERATOR_CONFIG"
+	@echo "  make upload-training-artifacts # upload a finished run to Drive and append the git log"
 	@echo ""
 	@echo "Useful overrides:"
 	@echo "  PYTHON=python3"
@@ -32,6 +42,10 @@ help:
 	@echo "  SYNCNET_RESUME=/abs/or/rel/checkpoint.pth"
 	@echo "  GENERATOR_RESUME=/abs/or/rel/checkpoint.pth"
 	@echo "  SPEAKER_LIST=/abs/or/rel/speakers.txt"
+	@echo "  ARTIFACTS_OUTPUT_DIR=training/output/<run_name>"
+	@echo "  ARTIFACTS_RUN_KIND=syncnet|generator|pipeline|smoke|auto"
+	@echo "  ARTIFACTS_RUN_NAME=<drive_subdir_name>"
+	@echo "  ARTIFACTS_CONFIG_PATH=training/configs/<config>.yaml"
 
 server-setup:
 	@if ! command -v apt-get >/dev/null 2>&1; then \
@@ -59,3 +73,19 @@ train-generator:
 		--syncnet $(SYNCNET_TEACHER) \
 		$(if $(GENERATOR_RESUME),--resume $(GENERATOR_RESUME),) \
 		$(if $(SPEAKER_LIST),--speaker-list $(SPEAKER_LIST),)
+
+upload-training-artifacts:
+	@if [ -z "$(ARTIFACTS_OUTPUT_DIR)" ]; then \
+		echo "ARTIFACTS_OUTPUT_DIR is required, e.g. training/output/<run_name>"; \
+		exit 1; \
+	fi
+	cd $(REPO_ROOT) && $(PYTHON) training/scripts/upload_training_artifacts.py \
+		--source-dir "$(ARTIFACTS_OUTPUT_DIR)" \
+		--run-kind "$(ARTIFACTS_RUN_KIND)" \
+		--remote "$(ARTIFACTS_REMOTE)" \
+		--drive-root-folder-id "$(ARTIFACTS_DRIVE_ROOT_ID)" \
+		--log-path "$(ARTIFACTS_LOG_PATH)" \
+		$(if $(ARTIFACTS_RUN_NAME),--run-name "$(ARTIFACTS_RUN_NAME)",) \
+		$(if $(ARTIFACTS_CONFIG_PATH),--config-path "$(ARTIFACTS_CONFIG_PATH)",) \
+		$(if $(filter 1 true yes,$(ARTIFACTS_INCLUDE_MEDIA)),--include-media,) \
+		$(if $(filter 1 true yes,$(ARTIFACTS_DRY_RUN)),--dry-run,)

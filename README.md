@@ -37,6 +37,9 @@ checkpoints, archives, and output artifacts are excluded from git.
   renamed.
 - `docs/handoffs`
   Latest handoff material from the most recent training runs.
+- `docs/training_runs`
+  Git-tracked training log with artifact links, config summaries, and benchmark
+  values for completed runs.
 
 ## Included latest pipeline
 
@@ -90,6 +93,10 @@ purpose. They should be reviewed one by one before being added:
   `training/configs/lipsync_cuda3090_hdtf_talkvid.yaml` by default and points
   at `models/official_syncnet/checkpoints/lipsync_expert.pth` unless
   overridden.
+- `make upload-training-artifacts`
+  Uploads a finished run to the shared training-artifacts Drive folder, writes
+  `artifacts_upload_manifest.json`, and appends a git-tracked run entry with:
+  Drive links, training parameters, and benchmark values.
 
 Useful overrides:
 
@@ -99,3 +106,7 @@ Useful overrides:
 - `SYNCNET_RESUME=...`
 - `GENERATOR_RESUME=...`
 - `SPEAKER_LIST=...`
+- `ARTIFACTS_OUTPUT_DIR=training/output/<run_name>`
+- `ARTIFACTS_RUN_KIND=syncnet|generator|pipeline|smoke|auto`
+- `ARTIFACTS_RUN_NAME=<drive_subdir_name>`
+- `ARTIFACTS_CONFIG_PATH=training/configs/<config>.yaml`
