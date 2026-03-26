@@ -165,8 +165,16 @@ def sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, face_sequences):
 
 
 def official_sync_loss_from_cosine(cos_sim):
-    targets = torch.ones((cos_sim.size(0), 1), device=cos_sim.device)
-    return F.binary_cross_entropy(cos_sim.unsqueeze(1), targets)
+    # The reference code applies BCE directly to cosine similarity. Modern
+    # PyTorch rejects that path under autocast and expects probability inputs
+    # in (0, 1), so we mirror the intent with an autocast-safe compatibility
+    # shim rather than silently switching to a different objective.
+    targets = torch.ones((cos_sim.size(0), 1), device=cos_sim.device, dtype=torch.float32)
+    probs = cos_sim.float().clamp_(1.0e-6, 1.0 - 1.0e-6).unsqueeze(1)
+    if cos_sim.device.type == "cuda":
+        with torch.amp.autocast("cuda", enabled=False):
+            return F.binary_cross_entropy(probs, targets)
+    return F.binary_cross_entropy(probs, targets)
 
 
 def main():
