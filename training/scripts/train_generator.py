@@ -177,12 +177,94 @@ def official_sync_loss_from_cosine(cos_sim):
     return F.binary_cross_entropy(probs, targets)
 
 
+def load_allowlist(path):
+    if not path:
+        return None
+    with open(path) as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def build_generator_dataset(cfg, img_size, roots, speaker_allowlist):
+    return LipSyncDataset(
+        roots=roots,
+        img_size=img_size,
+        mel_step_size=cfg["model"]["mel_steps"],
+        fps=cfg["data"]["fps"],
+        audio_cfg=cfg["audio"],
+        syncnet_T=cfg["syncnet"]["T"],
+        mode="generator",
+        cache_size=cfg["data"].get("cache_size", 8),
+        skip_bad_samples=cfg["data"].get("skip_bad_samples", True),
+        speaker_allowlist=speaker_allowlist,
+        lazy_cache_root=cfg["data"].get("lazy_cache_root"),
+        ffmpeg_bin=cfg["data"].get("ffmpeg_bin", "ffmpeg"),
+        materialize_timeout=cfg["data"].get("materialize_timeout", 600),
+        materialize_frames_size=cfg["data"].get("materialize_frames_size", cfg["model"]["img_size"]),
+    )
+
+
+def build_loader(dataset, cfg, batch_size, device, shuffle):
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": shuffle,
+        "num_workers": cfg["data"]["num_workers"],
+        "pin_memory": (device == "cuda"),
+        "drop_last": True,
+    }
+    if device == "cuda":
+        loader_kwargs["pin_memory_device"] = "cuda"
+    if cfg["data"]["num_workers"] > 0:
+        loader_kwargs["persistent_workers"] = cfg["data"].get("persistent_workers", True)
+        prefetch_factor = cfg["data"].get("prefetch_factor")
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
+    return DataLoader(dataset, **loader_kwargs)
+
+
+@torch.no_grad()
+def eval_syncnet_alignment(generator, syncnet, syncnet_kind, loader, device, max_batches, use_amp):
+    generator.eval()
+    sync_losses = []
+    recon_losses = []
+
+    for batch_idx, (face_input, indiv_mels, mel, gt) in enumerate(loader):
+        if batch_idx >= max_batches:
+            break
+
+        non_blocking = device == "cuda"
+        face_input = face_input.to(device, non_blocking=non_blocking)
+        indiv_mels = indiv_mels.to(device, non_blocking=non_blocking)
+        mel = mel.to(device, non_blocking=non_blocking)
+        gt = gt.to(device, non_blocking=non_blocking)
+
+        amp_ctx = autocast(enabled=use_amp) if device == "cuda" else nullcontext()
+        with amp_ctx:
+            pred = generator(indiv_mels, face_input)
+            if isinstance(pred, tuple):
+                pred_face = pred[0]
+            else:
+                pred_face = pred
+
+            cos_sim = sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, pred_face)
+            sync_loss = official_sync_loss_from_cosine(cos_sim)
+            recon_loss = F.l1_loss(pred_face, gt)
+
+        sync_losses.append(sync_loss.item())
+        recon_losses.append(recon_loss.item())
+
+    generator.train()
+    if not sync_losses:
+        return None, None
+    return sum(sync_losses) / len(sync_losses), sum(recon_losses) / len(recon_losses)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--syncnet", required=True, help="Path to trained SyncNet checkpoint")
     parser.add_argument("--resume", default=None)
     parser.add_argument("--speaker-list", default=None, help="Optional newline-separated list of speaker dirs to include")
+    parser.add_argument("--val-speaker-list", default=None, help="Optional newline-separated list of held-out dirs for official-style sync evaluation")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -212,44 +294,21 @@ def main():
     # faceclip roots (mp4 + json -> cached frames.npy / mel_*.npy on demand).
     roots = get_dataset_roots(cfg)
     log(f"Dataset roots: {roots}")
-    speaker_allowlist = None
-    if args.speaker_list:
-        with open(args.speaker_list) as f:
-            speaker_allowlist = [line.strip() for line in f if line.strip()]
+    speaker_allowlist = load_allowlist(args.speaker_list)
+    if speaker_allowlist is not None:
         log(f"Loaded speaker snapshot: {len(speaker_allowlist)} entries from {args.speaker_list}")
 
-    dataset = LipSyncDataset(
-        roots=roots,
-        img_size=img_size,
-        mel_step_size=cfg["model"]["mel_steps"],
-        fps=cfg["data"]["fps"],
-        audio_cfg=cfg["audio"],
-        syncnet_T=cfg["syncnet"]["T"],
-        mode="generator",
-        cache_size=cfg["data"].get("cache_size", 8),
-        skip_bad_samples=cfg["data"].get("skip_bad_samples", True),
-        speaker_allowlist=speaker_allowlist,
-        lazy_cache_root=cfg["data"].get("lazy_cache_root"),
-        ffmpeg_bin=cfg["data"].get("ffmpeg_bin", "ffmpeg"),
-        materialize_timeout=cfg["data"].get("materialize_timeout", 600),
-        materialize_frames_size=cfg["data"].get("materialize_frames_size", cfg["model"]["img_size"]),
-    )
-    loader_kwargs = {
-        "batch_size": cfg["generator"]["batch_size"],
-        "shuffle": True,
-        "num_workers": cfg["data"]["num_workers"],
-        "pin_memory": (device == "cuda"),
-        "drop_last": True,
-    }
-    if device == "cuda":
-        loader_kwargs["pin_memory_device"] = "cuda"
-    if cfg["data"]["num_workers"] > 0:
-        loader_kwargs["persistent_workers"] = cfg["data"].get("persistent_workers", True)
-        prefetch_factor = cfg["data"].get("prefetch_factor")
-        if prefetch_factor is not None:
-            loader_kwargs["prefetch_factor"] = prefetch_factor
-    loader = DataLoader(dataset, **loader_kwargs)
+    dataset = build_generator_dataset(cfg, img_size, roots, speaker_allowlist)
+    loader = build_loader(dataset, cfg, cfg["generator"]["batch_size"], device, shuffle=True)
     log(f"DataLoader: {len(loader)} batches, batch_size={cfg['generator']['batch_size']}")
+
+    val_allowlist = load_allowlist(args.val_speaker_list)
+    val_loader = None
+    if val_allowlist is not None:
+        log(f"Loaded val snapshot: {len(val_allowlist)} entries from {args.val_speaker_list}")
+        val_dataset = build_generator_dataset(cfg, img_size, roots, val_allowlist)
+        val_loader = build_loader(val_dataset, cfg, cfg["generator"]["batch_size"], device, shuffle=False)
+        log(f"ValLoader: {len(val_loader)} batches, batch_size={cfg['generator']['batch_size']}")
 
     # Models
     log("Creating generator...")
@@ -283,9 +342,10 @@ def main():
         log("Perceptual loss disabled")
 
     # Optimizers
-    g_opt = torch.optim.Adam(generator.parameters(), lr=cfg["generator"]["lr"], betas=(0.5, 0.999))
+    betas = tuple(cfg["generator"].get("betas", (0.9, 0.999)))
+    g_opt = torch.optim.Adam(generator.parameters(), lr=cfg["generator"]["lr"], betas=betas)
     d_opt = torch.optim.Adam(discriminator.parameters(), lr=cfg["generator"]["lr"],
-                              betas=(0.5, 0.999)) if discriminator else None
+                              betas=betas) if discriminator else None
 
     use_amp = cfg["training"]["mixed_precision"] and device == "cuda"
     if device == "cuda":
@@ -296,6 +356,7 @@ def main():
     log(f"Losses: L1={loss_cfg['l1']}, perc={loss_cfg['perceptual']}, "
         f"sync={loss_cfg['sync']} (warmup={loss_cfg.get('sync_warmup_epochs', 10)}), "
         f"gan={loss_cfg.get('gan', 0)}, alpha_reg={loss_cfg.get('alpha_reg', 0)}")
+    log(f"Optimizer: Adam betas={betas}")
     if device == "cuda":
         log(
             "CUDA opts: "
@@ -311,7 +372,7 @@ def main():
     log("=" * 60)
 
     # LR scheduler
-    if cfg["generator"]["lr_scheduler"] == "cosine":
+    if cfg["generator"].get("lr_scheduler") == "cosine":
         g_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             g_opt, T_max=cfg["generator"]["epochs"]
         )
@@ -329,6 +390,19 @@ def main():
         start_epoch = ck["epoch"] + 1
         log(f"Resumed from epoch {start_epoch}")
 
+    global_step = start_epoch * len(loader)
+    effective_sync_wt = loss_cfg.get("sync_initial", loss_cfg["sync"])
+    official_sync_schedule = bool(loss_cfg.get("sync_official_schedule", False))
+    sync_eval_interval = int(cfg["generator"].get("eval_interval_steps", 0))
+    sync_eval_batches = int(cfg["generator"].get("eval_batches", 700))
+    sync_eval_threshold = float(loss_cfg.get("sync_official_threshold", 0.75))
+    if official_sync_schedule:
+        log(
+            "Official-style sync schedule: "
+            f"initial={effective_sync_wt:.4f}, target={loss_cfg['sync']:.4f}, "
+            f"threshold={sync_eval_threshold:.3f}, interval={sync_eval_interval}, eval_batches={sync_eval_batches}"
+        )
+
     for epoch in range(start_epoch, cfg["generator"]["epochs"]):
         generator.train()
         if discriminator:
@@ -340,7 +414,7 @@ def main():
         batches_processed = 0
         ema100 = {key: None for key in totals}
 
-        use_sync = epoch >= loss_cfg.get("sync_warmup_epochs", 10)
+        use_sync = (effective_sync_wt > 0) and epoch >= loss_cfg.get("sync_warmup_epochs", 10)
 
         for batch_idx, (face_input, indiv_mels, mel, gt) in enumerate(loader):
             non_blocking = device == "cuda"
@@ -380,7 +454,7 @@ def main():
                 #   audio: (B, 1, 80, 16) — mel chunk
                 sync_loss = torch.tensor(0.0, device=device)
                 sync_reward = torch.tensor(0.0, device=device)
-                if use_sync and loss_cfg["sync"] > 0:
+                if use_sync and effective_sync_wt > 0:
                     cos_sim = sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, pred_face)
                     sync_reward = cos_sim.mean()
                     sync_loss = official_sync_loss_from_cosine(cos_sim)
@@ -401,19 +475,21 @@ def main():
                     tv_w = (pred_alpha[..., :, 1:] - pred_alpha[..., :, :-1]).abs().mean()
                     alpha_loss = (tv_h + tv_w) * loss_cfg["alpha_reg"]
 
-                sync_wt = loss_cfg["sync"] if use_sync else 0.0
+                sync_wt = effective_sync_wt if use_sync else 0.0
                 recon_wt = max(0.0, 1.0 - sync_wt)
                 g_loss = (recon_wt * l1) + (sync_wt * sync_loss) + perc + gan_g_loss + alpha_loss
 
             if scaler:
                 scaler.scale(g_loss).backward()
                 scaler.unscale_(g_opt)
-                nn.utils.clip_grad_norm_(generator.parameters(), cfg["training"]["gradient_clip"])
+                if cfg["training"].get("gradient_clip", 0) > 0:
+                    nn.utils.clip_grad_norm_(generator.parameters(), cfg["training"]["gradient_clip"])
                 scaler.step(g_opt)
                 scaler.update()
             else:
                 g_loss.backward()
-                nn.utils.clip_grad_norm_(generator.parameters(), cfg["training"]["gradient_clip"])
+                if cfg["training"].get("gradient_clip", 0) > 0:
+                    nn.utils.clip_grad_norm_(generator.parameters(), cfg["training"]["gradient_clip"])
                 g_opt.step()
 
             # ---- Discriminator ----
@@ -450,6 +526,7 @@ def main():
             totals["alpha"] += alpha_loss.item()
             totals["total"] += g_loss.item()
             batches_processed += 1
+            global_step += 1
 
             current_metrics = {
                 "l1": l1.item(),
@@ -478,6 +555,33 @@ def main():
                     f"alpha={ema100['alpha']:.4f} total={ema100['total']:.4f}"
                 )
 
+            if (
+                official_sync_schedule
+                and val_loader is not None
+                and sync_eval_interval > 0
+                and global_step % sync_eval_interval == 0
+            ):
+                avg_sync, avg_recon = eval_syncnet_alignment(
+                    generator,
+                    syncnet,
+                    syncnet_kind,
+                    val_loader,
+                    device,
+                    sync_eval_batches,
+                    use_amp,
+                )
+                if avg_sync is not None:
+                    log(
+                        f"  Eval step {global_step}: val_sync={avg_sync:.4f} "
+                        f"val_l1={avg_recon:.4f} active_sync_wt={effective_sync_wt:.4f}"
+                    )
+                    if effective_sync_wt < loss_cfg["sync"] and avg_sync < sync_eval_threshold:
+                        effective_sync_wt = loss_cfg["sync"]
+                        log(
+                            f"  Sync weight enabled: effective_sync_wt={effective_sync_wt:.4f} "
+                            f"(val_sync={avg_sync:.4f} < {sync_eval_threshold:.4f})"
+                        )
+
             if max_batches_per_epoch and batches_processed >= max_batches_per_epoch:
                 log(f"  Reached max_batches_per_epoch={max_batches_per_epoch}, ending epoch early")
                 break
@@ -491,7 +595,7 @@ def main():
             f"gan_g={totals['gan_g']/n:.4f} "
             f"gan_d={totals['gan_d']/n:.4f} total={totals['total']/n:.4f} "
             f"({elapsed:.0f}s, {n*cfg['generator']['batch_size']/elapsed:.1f} samples/s) "
-            f"lr={g_opt.param_groups[0]['lr']:.6f}"
+            f"lr={g_opt.param_groups[0]['lr']:.6f} sync_wt={effective_sync_wt:.4f}"
             f"{' [sync ON]' if use_sync else ' [sync OFF]'}")
 
         if g_scheduler:

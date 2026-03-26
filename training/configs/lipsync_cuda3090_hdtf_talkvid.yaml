@@ -27,12 +27,18 @@ generator:
   epochs: 10
   batch_size: 8
   lr: 1.0e-4
-  lr_scheduler: "cosine"
+  lr_scheduler: "none"
+  betas: [0.9, 0.999]
+  eval_interval_steps: 3000
+  eval_batches: 700
   loss:
     l1: 1.0
     perceptual: 0.0
-    sync: 0.2
+    sync: 0.01
+    sync_initial: 0.0
     sync_warmup_epochs: 0
+    sync_official_schedule: true
+    sync_official_threshold: 0.75
     gan: 0.0
     temporal: 0.0
     alpha_reg: 0.0
@@ -54,7 +60,7 @@ training:
   allow_tf32: true
   cudnn_benchmark: true
   float32_matmul_precision: "high"
-  gradient_clip: 1.0
+  gradient_clip: 0.0
   save_every: 1
   sample_every: 1
   output_dir: "output/training_cuda3090_lipsync_hdtf_talkvid_latest"

@@ -59,13 +59,123 @@ class LipSyncGenerator(nn.Module):
         self.predict_alpha = predict_alpha
         B = base_channels
 
+        if img_size == 96:
+            # Mirror the open-source Wav2Lip architecture exactly for the
+            # 96px path. Higher resolutions still use our generalized variant.
+            self.face_encoder_blocks = nn.ModuleList([
+                nn.Sequential(ConvBlock(6, 16, 7, 1, 3)),
+
+                nn.Sequential(
+                    ConvBlock(16, 32, 3, 2, 1),
+                    ConvBlock(32, 32, 3, 1, 1, residual=True),
+                    ConvBlock(32, 32, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    ConvBlock(32, 64, 3, 2, 1),
+                    ConvBlock(64, 64, 3, 1, 1, residual=True),
+                    ConvBlock(64, 64, 3, 1, 1, residual=True),
+                    ConvBlock(64, 64, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    ConvBlock(64, 128, 3, 2, 1),
+                    ConvBlock(128, 128, 3, 1, 1, residual=True),
+                    ConvBlock(128, 128, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    ConvBlock(128, 256, 3, 2, 1),
+                    ConvBlock(256, 256, 3, 1, 1, residual=True),
+                    ConvBlock(256, 256, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    ConvBlock(256, 512, 3, 2, 1),
+                    ConvBlock(512, 512, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    ConvBlock(512, 512, 3, 1, 0),
+                    ConvBlock(512, 512, 1, 1, 0),
+                ),
+            ])
+
+            self.audio_encoder = nn.Sequential(
+                ConvBlock(1, 32, 3, 1, 1),
+                ConvBlock(32, 32, 3, 1, 1, residual=True),
+                ConvBlock(32, 32, 3, 1, 1, residual=True),
+
+                ConvBlock(32, 64, 3, (3, 1), 1),
+                ConvBlock(64, 64, 3, 1, 1, residual=True),
+                ConvBlock(64, 64, 3, 1, 1, residual=True),
+
+                ConvBlock(64, 128, 3, 3, 1),
+                ConvBlock(128, 128, 3, 1, 1, residual=True),
+                ConvBlock(128, 128, 3, 1, 1, residual=True),
+
+                ConvBlock(128, 256, 3, (3, 2), 1),
+                ConvBlock(256, 256, 3, 1, 1, residual=True),
+
+                ConvBlock(256, 512, 3, 1, 0),
+                ConvBlock(512, 512, 1, 1, 0),
+            )
+
+            self.face_decoder_blocks = nn.ModuleList([
+                nn.Sequential(ConvBlock(512, 512, 1, 1, 0)),
+
+                nn.Sequential(
+                    DeconvBlock(1024, 512, 3, 1, 0, 0),
+                    ConvBlock(512, 512, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    DeconvBlock(1024, 512, 3, 2, 1, 1),
+                    ConvBlock(512, 512, 3, 1, 1, residual=True),
+                    ConvBlock(512, 512, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    DeconvBlock(768, 384, 3, 2, 1, 1),
+                    ConvBlock(384, 384, 3, 1, 1, residual=True),
+                    ConvBlock(384, 384, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    DeconvBlock(512, 256, 3, 2, 1, 1),
+                    ConvBlock(256, 256, 3, 1, 1, residual=True),
+                    ConvBlock(256, 256, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    DeconvBlock(320, 128, 3, 2, 1, 1),
+                    ConvBlock(128, 128, 3, 1, 1, residual=True),
+                    ConvBlock(128, 128, 3, 1, 1, residual=True),
+                ),
+
+                nn.Sequential(
+                    DeconvBlock(160, 64, 3, 2, 1, 1),
+                    ConvBlock(64, 64, 3, 1, 1, residual=True),
+                    ConvBlock(64, 64, 3, 1, 1, residual=True),
+                ),
+            ])
+
+            self.output_face = nn.Sequential(
+                ConvBlock(80, 32, 3, 1, 1),
+                nn.Conv2d(32, 3, 1, 1, 0),
+                nn.Sigmoid(),
+            )
+            if predict_alpha:
+                self.output_alpha = nn.Sequential(
+                    ConvBlock(80, 16, 3, 1, 1),
+                    nn.Conv2d(16, 1, 1, 1, 0),
+                    nn.Sigmoid(),
+                )
+            return
+
         # Encoder channel progression (same for all resolutions)
         # More blocks for larger resolutions
-        if img_size == 96:
-            enc_channels = [B, B*2, B*4, B*8, 512, 512, 512]
-            # spatial:      96  48   24   12    6    3    1
-            final_conv = (3, 1, 0)  # 3→1: kernel=3, stride=1, padding=0
-        elif img_size == 128:
+        if img_size == 128:
             enc_channels = [B, B*2, B*4, B*8, 512, 512, 512, 512]
             # spatial:      128 64   32   16    8    4    2    1
             final_conv = (2, 1, 0)  # 2→1: kernel=2, stride=1, padding=0

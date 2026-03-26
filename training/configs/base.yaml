@@ -32,14 +32,20 @@ generator:
   epochs: 200
   batch_size: 4
   lr: 1.0e-4
-  lr_scheduler: "cosine"
+  lr_scheduler: "none"
+  betas: [0.9, 0.999]
+  eval_interval_steps: 3000
+  eval_batches: 700
 
   # Loss weights
   loss:
-    l1: 1.0                # lower-half reconstruction
+    l1: 1.0                # full-face reconstruction (reference Wav2Lip path)
     perceptual: 0.0        # keep off until the model proves it uses audio
-    sync: 0.2              # stronger SyncNet pressure for lip-audio coupling
-    sync_warmup_epochs: 0  # enable sync supervision from the start
+    sync: 0.01             # reference target weight once sync is enabled
+    sync_initial: 0.0      # start like official Wav2Lip and enable later
+    sync_warmup_epochs: 0
+    sync_official_schedule: true
+    sync_official_threshold: 0.75
     gan: 0.0               # keep off during audio-sanity phase
     temporal: 0.0          # handled implicitly by the T=5 generator window
     alpha_reg: 0.0         # alpha head disabled for now
@@ -64,7 +70,7 @@ data:
 training:
   device: "cuda"           # cuda, mps, cpu
   mixed_precision: true
-  gradient_clip: 1.0
+  gradient_clip: 0.0
   save_every: 5            # save checkpoint every N epochs
   sample_every: 1          # generate sample images every N epochs
   output_dir: "output/training"
