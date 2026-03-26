@@ -78,6 +78,18 @@ def run_cmd(cmd, cwd=TRAINING_ROOT):
     subprocess.run(cmd, cwd=cwd, check=True)
 
 
+def unique_paths(paths):
+    seen = set()
+    result = []
+    for path in paths:
+        resolved = Path(path).resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        result.append(Path(path))
+    return result
+
+
 def derive_generator_output_dir(syncnet_output_dir, explicit_output_dir):
     if explicit_output_dir:
         return explicit_output_dir
@@ -218,6 +230,13 @@ def main():
     parser.add_argument("--generator-epochs", type=int, default=None)
     parser.add_argument("--generator-output-dir", default=None)
     parser.add_argument("--generator-lazy-cache-root", default=None)
+    parser.add_argument("--generator-resume", default=None)
+    parser.add_argument(
+        "--extra-checkpoint",
+        action="append",
+        default=[],
+        help="Additional SyncNet checkpoint(s) to include in compare/select",
+    )
     parser.add_argument("--poll-seconds", type=int, default=60)
     args = parser.parse_args()
 
@@ -226,6 +245,7 @@ def main():
     speaker_snapshot = resolve_training_path(args.speaker_snapshot)
     official_syncnet = resolve_training_path(args.official_syncnet)
     generator_template_config = resolve_training_path(args.generator_template_config)
+    generator_resume = resolve_training_path(args.generator_resume) if args.generator_resume else None
 
     sync_cfg = load_yaml(syncnet_config_path)
     template_cfg = load_yaml(generator_template_config)
@@ -240,7 +260,12 @@ def main():
 
     syncnet_ckpt_dir = syncnet_output_dir / "syncnet"
     checkpoints = sorted(syncnet_ckpt_dir.glob("syncnet_epoch*.pth"))
-    if not checkpoints:
+    extra_checkpoints = [resolve_training_path(path) for path in args.extra_checkpoint]
+    for extra_ckpt in extra_checkpoints:
+        if not extra_ckpt.exists():
+            raise RuntimeError(f"Extra checkpoint not found: {extra_ckpt}")
+    all_checkpoints = unique_paths([*checkpoints, *extra_checkpoints])
+    if not all_checkpoints:
         raise RuntimeError(f"No SyncNet checkpoints found in {syncnet_ckpt_dir}")
 
     compare_json = syncnet_output_dir / "syncnet_teacher_compare_all_epochs_vs_official.json"
@@ -300,7 +325,7 @@ def main():
             root = sync_cfg.get("data", {}).get(root_key)
             if root:
                 compare_cmd.extend(["--processed-root", root])
-        compare_cmd.extend(["--checkpoints", *[str(path) for path in checkpoints]])
+        compare_cmd.extend(["--checkpoints", *[str(path) for path in all_checkpoints]])
         run_cmd(compare_cmd)
     else:
         log(f"Reusing existing compare json: {compare_json}")
@@ -316,7 +341,7 @@ def main():
             "--output",
             str(selected_json),
             "--checkpoints",
-            *[str(path) for path in checkpoints],
+            *[str(path) for path in all_checkpoints],
         ]
         run_cmd(select_cmd)
     else:
@@ -354,6 +379,10 @@ def main():
         "--speaker-list",
         str(speaker_snapshot),
     ]
+    if generator_resume:
+        if not generator_resume.exists():
+            raise RuntimeError(f"Generator resume checkpoint not found: {generator_resume}")
+        generator_cmd.extend(["--resume", str(generator_resume)])
     run_cmd(generator_cmd)
 
 
