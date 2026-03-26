@@ -128,8 +128,8 @@ def build_candidate_specs(dataset: LipSyncDataset, shift_frame: int, cached_only
         if provider is None:
             continue
 
-        frames, mel_chunks, _ = dataset._load_speaker(speaker_key)
-        n_frames = min(len(frames), len(mel_chunks))
+        meta = entry.get("meta") or {}
+        n_frames = int(meta.get("n_frames") or meta.get("frames") or 0)
         if n_frames < (dataset.syncnet_T + shift_frame + 2):
             continue
 
