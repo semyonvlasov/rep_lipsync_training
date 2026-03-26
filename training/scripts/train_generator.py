@@ -177,6 +177,16 @@ def official_sync_loss_from_cosine(cos_sim):
     return F.binary_cross_entropy(probs, targets)
 
 
+def compute_adaptive_sync_weight(avg_sync, start_sync, full_sync, target_sync_wt):
+    if target_sync_wt <= 0:
+        return 0.0
+    if start_sync <= full_sync:
+        return target_sync_wt if avg_sync <= full_sync else 0.0
+    progress = (start_sync - avg_sync) / (start_sync - full_sync)
+    progress = max(0.0, min(1.0, progress))
+    return target_sync_wt * progress
+
+
 def load_allowlist(path):
     if not path:
         return None
@@ -393,14 +403,24 @@ def main():
     global_step = start_epoch * len(loader)
     effective_sync_wt = loss_cfg.get("sync_initial", loss_cfg["sync"])
     official_sync_schedule = bool(loss_cfg.get("sync_official_schedule", False))
+    adaptive_sync_schedule = bool(loss_cfg.get("sync_adaptive_schedule", False))
     sync_eval_interval = int(cfg["generator"].get("eval_interval_steps", 0))
     sync_eval_batches = int(cfg["generator"].get("eval_batches", 700))
     sync_eval_threshold = float(loss_cfg.get("sync_official_threshold", 0.75))
+    sync_adaptive_start = float(loss_cfg.get("sync_adaptive_start", 8.0))
+    sync_adaptive_full = float(loss_cfg.get("sync_adaptive_full", 4.5))
     if official_sync_schedule:
         log(
             "Official-style sync schedule: "
             f"initial={effective_sync_wt:.4f}, target={loss_cfg['sync']:.4f}, "
             f"threshold={sync_eval_threshold:.3f}, interval={sync_eval_interval}, eval_batches={sync_eval_batches}"
+        )
+    elif adaptive_sync_schedule:
+        log(
+            "Adaptive sync schedule: "
+            f"initial={effective_sync_wt:.4f}, target={loss_cfg['sync']:.4f}, "
+            f"start={sync_adaptive_start:.3f}, full={sync_adaptive_full:.3f}, "
+            f"interval={sync_eval_interval}, eval_batches={sync_eval_batches}"
         )
 
     for epoch in range(start_epoch, cfg["generator"]["epochs"]):
@@ -556,7 +576,7 @@ def main():
                 )
 
             if (
-                official_sync_schedule
+                (official_sync_schedule or adaptive_sync_schedule)
                 and val_loader is not None
                 and sync_eval_interval > 0
                 and global_step % sync_eval_interval == 0
@@ -575,12 +595,28 @@ def main():
                         f"  Eval step {global_step}: val_sync={avg_sync:.4f} "
                         f"val_l1={avg_recon:.4f} active_sync_wt={effective_sync_wt:.4f}"
                     )
-                    if effective_sync_wt < loss_cfg["sync"] and avg_sync < sync_eval_threshold:
-                        effective_sync_wt = loss_cfg["sync"]
-                        log(
-                            f"  Sync weight enabled: effective_sync_wt={effective_sync_wt:.4f} "
-                            f"(val_sync={avg_sync:.4f} < {sync_eval_threshold:.4f})"
+                    if official_sync_schedule:
+                        if effective_sync_wt < loss_cfg["sync"] and avg_sync < sync_eval_threshold:
+                            effective_sync_wt = loss_cfg["sync"]
+                            log(
+                                f"  Sync weight enabled: effective_sync_wt={effective_sync_wt:.4f} "
+                                f"(val_sync={avg_sync:.4f} < {sync_eval_threshold:.4f})"
+                            )
+                    elif adaptive_sync_schedule:
+                        next_sync_wt = compute_adaptive_sync_weight(
+                            avg_sync=avg_sync,
+                            start_sync=sync_adaptive_start,
+                            full_sync=sync_adaptive_full,
+                            target_sync_wt=loss_cfg["sync"],
                         )
+                        if abs(next_sync_wt - effective_sync_wt) > 1.0e-8:
+                            effective_sync_wt = next_sync_wt
+                            log(
+                                "  Adaptive sync weight update: "
+                                f"effective_sync_wt={effective_sync_wt:.4f} "
+                                f"(val_sync={avg_sync:.4f}, start={sync_adaptive_start:.4f}, "
+                                f"full={sync_adaptive_full:.4f})"
+                            )
 
             if max_batches_per_epoch and batches_processed >= max_batches_per_epoch:
                 log(f"  Reached max_batches_per_epoch={max_batches_per_epoch}, ending epoch early")

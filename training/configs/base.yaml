@@ -44,8 +44,11 @@ generator:
     sync: 0.01             # reference target weight once sync is enabled
     sync_initial: 0.0      # start like official Wav2Lip and enable later
     sync_warmup_epochs: 0
-    sync_official_schedule: true
+    sync_official_schedule: false
     sync_official_threshold: 0.75
+    sync_adaptive_schedule: true
+    sync_adaptive_start: 8.0
+    sync_adaptive_full: 4.5
     gan: 0.0               # keep off during audio-sanity phase
     temporal: 0.0          # handled implicitly by the T=5 generator window
     alpha_reg: 0.0         # alpha head disabled for now

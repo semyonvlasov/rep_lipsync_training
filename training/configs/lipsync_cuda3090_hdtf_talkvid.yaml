@@ -37,8 +37,11 @@ generator:
     sync: 0.01
     sync_initial: 0.0
     sync_warmup_epochs: 0
-    sync_official_schedule: true
+    sync_official_schedule: false
     sync_official_threshold: 0.75
+    sync_adaptive_schedule: true
+    sync_adaptive_start: 8.0
+    sync_adaptive_full: 4.5
     gan: 0.0
     temporal: 0.0
     alpha_reg: 0.0
