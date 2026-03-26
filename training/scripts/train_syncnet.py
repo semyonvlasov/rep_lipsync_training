@@ -115,9 +115,7 @@ def main():
         total_loss = 0
         total_acc = 0
         t0 = time.time()
-        loss_ema50 = None
         loss_ema100 = None
-        acc_ema50 = None
         acc_ema100 = None
 
         for batch_idx, (visual, audio, labels) in enumerate(loader):
@@ -151,17 +149,16 @@ def main():
 
             total_loss += loss.item()
             total_acc += acc
-            loss_ema50 = update_ema(loss_ema50, loss.item(), 50)
             loss_ema100 = update_ema(loss_ema100, loss.item(), 100)
-            acc_ema50 = update_ema(acc_ema50, acc, 50)
             acc_ema100 = update_ema(acc_ema100, acc, 100)
 
             if batch_idx % 50 == 0:
                 log(
                     f"  E{epoch} [{batch_idx}/{len(loader)}] "
-                    f"loss={loss.item():.4f} acc={acc:.3f} "
-                    f"ema50_loss={loss_ema50:.4f} ema50_acc={acc_ema50:.3f} "
-                    f"ema100_loss={loss_ema100:.4f} ema100_acc={acc_ema100:.3f}"
+                    f"loss={loss.item():.4f} acc={acc:.3f}"
+                )
+                log(
+                    f"    ema100 loss={loss_ema100:.4f} acc={acc_ema100:.3f}"
                 )
 
         avg_loss = total_loss / max(1, len(loader))
@@ -170,9 +167,10 @@ def main():
 
         log(
             f"Epoch {epoch}: loss={avg_loss:.4f} acc={avg_acc:.3f} "
-            f"ema50_loss={loss_ema50:.4f} ema50_acc={acc_ema50:.3f} "
-            f"ema100_loss={loss_ema100:.4f} ema100_acc={acc_ema100:.3f} "
             f"({elapsed:.0f}s)"
+        )
+        log(
+            f"  Epoch {epoch} ema100: loss={loss_ema100:.4f} acc={acc_ema100:.3f}"
         )
 
         # Save checkpoint
