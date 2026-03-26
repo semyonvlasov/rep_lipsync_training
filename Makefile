@@ -10,6 +10,10 @@ SERVER_PY_REQUIREMENTS := $(TRAINING_ROOT)/requirements-server.txt
 SMOKE_LAZY_WORKFLOW ?= workflows/train/run_lazy_smoke_remote_20260325.sh
 SYNCNET_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
 GENERATOR_CONFIG ?= configs/lipsync_cuda3090_hdtf_talkvid.yaml
+PREWARM_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
+PREWARM_SPEAKER_LIST ?=
+PREWARM_LOG_EVERY ?= 100
+PREWARM_MAX_ITEMS ?=
 SYNCNET_TEACHER ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 OFFICIAL_SYNCNET_PATH ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 SYNCNET_RESUME ?=
@@ -49,7 +53,7 @@ BENCH_STATIC ?= 0
 BENCH_NOSMOOTH ?= 0
 BENCH_S3FD_PATH ?=
 
-.PHONY: help server-setup smoke-lazy train-syncnet train-generator watch-syncnet-generator bench-wav2lip upload-training-artifacts
+.PHONY: help server-setup smoke-lazy train-syncnet train-generator prewarm-syncnet-cache watch-syncnet-generator bench-wav2lip upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -57,6 +61,7 @@ help:
 	@echo "  make smoke-lazy      # run the lazy dataset smoke workflow"
 	@echo "  make train-syncnet   # run scripts/train_syncnet.py with \$$SYNCNET_CONFIG"
 	@echo "  make train-generator # run scripts/train_generator.py with \$$GENERATOR_CONFIG"
+	@echo "  make prewarm-syncnet-cache # pre-materialize lazy frames/mels into the configured cache root"
 	@echo "  make watch-syncnet-generator # wait for SyncNet, benchmark all epochs vs official, then launch generator"
 	@echo "  make bench-wav2lip   # run the official Wav2Lip benchmark path (SFD + 96x96 generator)"
 	@echo "  make upload-training-artifacts # upload a finished run to Drive and append the git log"
@@ -107,6 +112,13 @@ train-generator:
 		--syncnet $(SYNCNET_TEACHER) \
 		$(if $(GENERATOR_RESUME),--resume $(GENERATOR_RESUME),) \
 		$(if $(SPEAKER_LIST),--speaker-list $(SPEAKER_LIST),)
+
+prewarm-syncnet-cache:
+	cd $(TRAINING_ROOT) && $(PYTHON) scripts/prewarm_lazy_cache.py \
+		--config $(PREWARM_CONFIG) \
+		--log-every $(PREWARM_LOG_EVERY) \
+		$(if $(PREWARM_SPEAKER_LIST),--speaker-list $(PREWARM_SPEAKER_LIST),) \
+		$(if $(PREWARM_MAX_ITEMS),--max-items $(PREWARM_MAX_ITEMS),)
 
 watch-syncnet-generator:
 	@if [ -z "$(SYNCNET_OUTPUT_DIR)" ]; then \

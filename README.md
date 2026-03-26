@@ -96,6 +96,11 @@ purpose. They should be reviewed one by one before being added:
   `training/configs/lipsync_cuda3090_hdtf_talkvid.yaml` by default and points
   at `models/official_syncnet/checkpoints/lipsync_expert.pth` unless
   overridden.
+- `make prewarm-syncnet-cache`
+  Pre-materializes lazy faceclip samples into the configured cache root using
+  the current audio frontend and frame size from the config. This is useful
+  after a Drive merge so the next `SyncNet` run does not spend its first
+  batches decoding video and building mel caches.
 - `make bench-wav2lip`
   Runs the official Wav2Lip benchmark path with:
   `SFD face detection -> 96x96 Wav2Lip -> paste-back`.
@@ -116,6 +121,8 @@ Useful overrides:
 - `SYNCNET_RESUME=...`
 - `GENERATOR_RESUME=...`
 - `SPEAKER_LIST=...`
+- `PREWARM_CONFIG=...`
+- `PREWARM_SPEAKER_LIST=...`
 - `BENCH_FACE=...`
 - `BENCH_AUDIO=...`
 - `BENCH_CHECKPOINT=...`
