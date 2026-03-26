@@ -89,6 +89,13 @@ def log(msg):
     print(f"[{ts}] {msg}", flush=True)
 
 
+def update_ema(current, value, span):
+    alpha = 2.0 / (span + 1.0)
+    if current is None:
+        return value
+    return (alpha * value) + ((1.0 - alpha) * current)
+
+
 def flatten_temporal(x):
     """(B, C, T, H, W) -> (B*T, C, H, W); passthrough for 4D tensors."""
     if x.dim() == 5:
@@ -318,6 +325,7 @@ def main():
                   "temporal": 0, "alpha": 0, "total": 0}
         t0 = time.time()
         batches_processed = 0
+        ema100 = {key: None for key in totals}
 
         use_sync = epoch >= loss_cfg.get("sync_warmup_epochs", 10)
 
@@ -428,12 +436,32 @@ def main():
             totals["total"] += g_loss.item()
             batches_processed += 1
 
+            current_metrics = {
+                "l1": l1.item(),
+                "perc": perc.item(),
+                "sync": sync_loss.item(),
+                "sync_reward": sync_reward.item(),
+                "gan_g": gan_g_loss.item(),
+                "gan_d": d_loss_val,
+                "alpha": alpha_loss.item(),
+                "total": g_loss.item(),
+            }
+            for key, value in current_metrics.items():
+                ema100[key] = update_ema(ema100[key], value, 100)
+
             if batch_idx % 60 == 0:
                 log(f"  E{epoch} [{batch_idx}/{len(loader)}] "
                     f"l1={l1.item():.4f} perc={perc.item():.4f} "
                     f"sync={sync_loss.item():.4f} reward={sync_reward.item():.4f} "
                     f"gan_g={gan_g_loss.item():.4f} "
                     f"total={g_loss.item():.4f}")
+                log(
+                    "    ema100 "
+                    f"l1={ema100['l1']:.4f} perc={ema100['perc']:.4f} "
+                    f"sync={ema100['sync']:.4f} reward={ema100['sync_reward']:.4f} "
+                    f"gan_g={ema100['gan_g']:.4f} gan_d={ema100['gan_d']:.4f} "
+                    f"alpha={ema100['alpha']:.4f} total={ema100['total']:.4f}"
+                )
 
             if max_batches_per_epoch and batches_processed >= max_batches_per_epoch:
                 log(f"  Reached max_batches_per_epoch={max_batches_per_epoch}, ending epoch early")
