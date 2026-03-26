@@ -54,8 +54,22 @@ BENCH_RESIZE_FACTOR ?= 1
 BENCH_STATIC ?= 0
 BENCH_NOSMOOTH ?= 0
 BENCH_S3FD_PATH ?=
+PUBLISH_CHECKPOINT ?=
+PUBLISH_INFER_ONLY_OUT ?=
+PUBLISH_RUN_NAME ?=
+PUBLISH_REMOTE ?= gdrive:
+PUBLISH_DRIVE_ROOT_ID ?= 1y1P-LI3YTPV65zpHXMSrNYsykN2-s5Pv
+PUBLISH_FACE_LIST ?=
+PUBLISH_AUDIO ?=
+PUBLISH_OUTPUT_DIR ?=
+PUBLISH_DEVICE ?= cuda
+PUBLISH_DETECTOR_DEVICE ?= cuda
+PUBLISH_BATCH_SIZE ?= 32
+PUBLISH_FACE_DET_BATCH_SIZE ?= 4
+PUBLISH_S3FD_PATH ?=
+PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help server-setup smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip upload-training-artifacts
+.PHONY: help server-setup smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -67,6 +81,7 @@ help:
 	@echo "  make observe-system  # start a background CPU/RAM/GPU/VRAM/network observer"
 	@echo "  make watch-syncnet-generator # wait for SyncNet, benchmark all epochs vs official, then launch generator"
 	@echo "  make bench-wav2lip   # run the official Wav2Lip benchmark path (SFD + 96x96 generator)"
+	@echo "  make publish-checkpoint-benchmark # upload a checkpoint to Drive and benchmark it on-server"
 	@echo "  make upload-training-artifacts # upload a finished run to Drive and append the git log"
 	@echo ""
 	@echo "Useful overrides:"
@@ -84,6 +99,9 @@ help:
 	@echo "  BENCH_FACE=/abs/path/face.mp4"
 	@echo "  BENCH_AUDIO=/abs/path/audio.mp3"
 	@echo "  BENCH_CHECKPOINT=/abs/path/Wav2Lip-SD-GAN.pt"
+	@echo "  PUBLISH_CHECKPOINT=output/<run>/generator/generator_epoch000.pth"
+	@echo "  PUBLISH_FACE_LIST=\"/abs/face1.mp4 /abs/face2.mp4\""
+	@echo "  PUBLISH_AUDIO=/abs/path/short_4s.mp3"
 	@echo "  ARTIFACTS_OUTPUT_DIR=training/output/<run_name>"
 	@echo "  ARTIFACTS_RUN_KIND=syncnet|generator|pipeline|smoke|auto"
 	@echo "  ARTIFACTS_RUN_NAME=<drive_subdir_name>"
@@ -194,6 +212,35 @@ bench-wav2lip:
 		$(if $(BENCH_S3FD_PATH),--s3fd_path "$(BENCH_S3FD_PATH)",) \
 		$(if $(filter 1 true yes,$(BENCH_STATIC)),--static,) \
 		$(if $(filter 1 true yes,$(BENCH_NOSMOOTH)),--nosmooth,)
+
+publish-checkpoint-benchmark:
+	@if [ -z "$(PUBLISH_CHECKPOINT)" ]; then \
+		echo "PUBLISH_CHECKPOINT is required, e.g. output/<run>/generator/generator_epoch000.pth"; \
+		exit 1; \
+	fi
+	@if [ -z "$(PUBLISH_AUDIO)" ]; then \
+		echo "PUBLISH_AUDIO is required, e.g. /abs/path/short_4s.mp3"; \
+		exit 1; \
+	fi
+	@if [ -z "$(PUBLISH_FACE_LIST)" ]; then \
+		echo "PUBLISH_FACE_LIST is required, e.g. \"/abs/portrait_avatar.mp4 /abs/portrait_rama.mp4\""; \
+		exit 1; \
+	fi
+	cd $(TRAINING_ROOT) && $(PYTHON) scripts/publish_checkpoint_benchmark.py \
+		--checkpoint "$(PUBLISH_CHECKPOINT)" \
+		--audio "$(PUBLISH_AUDIO)" \
+		$(foreach f,$(PUBLISH_FACE_LIST),--face "$(f)") \
+		--remote "$(PUBLISH_REMOTE)" \
+		--drive-root-folder-id "$(PUBLISH_DRIVE_ROOT_ID)" \
+		--device "$(PUBLISH_DEVICE)" \
+		--detector-device "$(PUBLISH_DETECTOR_DEVICE)" \
+		--batch-size $(PUBLISH_BATCH_SIZE) \
+		--face-det-batch-size $(PUBLISH_FACE_DET_BATCH_SIZE) \
+		$(if $(PUBLISH_INFER_ONLY_OUT),--infer-only-out "$(PUBLISH_INFER_ONLY_OUT)",) \
+		$(if $(PUBLISH_RUN_NAME),--run-name "$(PUBLISH_RUN_NAME)",) \
+		$(if $(PUBLISH_OUTPUT_DIR),--output-dir "$(PUBLISH_OUTPUT_DIR)",) \
+		$(if $(PUBLISH_S3FD_PATH),--s3fd-path "$(PUBLISH_S3FD_PATH)",) \
+		$(if $(filter 1 true yes,$(PUBLISH_SKIP_UPLOAD)),--skip-upload,)
 
 upload-training-artifacts:
 	@if [ -z "$(ARTIFACTS_OUTPUT_DIR)" ]; then \

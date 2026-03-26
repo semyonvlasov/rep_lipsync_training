@@ -115,6 +115,16 @@ purpose. They should be reviewed one by one before being added:
   `BENCH_FACE=...`
   `BENCH_AUDIO=...`
   `BENCH_CHECKPOINT=...`
+- `make publish-checkpoint-benchmark`
+  Remote-friendly checkpoint publish path:
+  saves a slim `infer_only` checkpoint when needed, uploads checkpoint artifacts
+  to the shared Drive, runs the same official Wav2Lip-style benchmark on-server,
+  writes `checkpoint_publish_manifest.json`, and prints a recommended `scp`
+  command for copying only the small benchmark MP4s back locally.
+  Required overrides:
+  `PUBLISH_CHECKPOINT=...`
+  `PUBLISH_FACE_LIST="... ..."`
+  `PUBLISH_AUDIO=...`
 - `make upload-training-artifacts`
   Uploads a finished run to the shared training-artifacts Drive folder, writes
   `artifacts_upload_manifest.json`, and appends a git-tracked run entry with:
@@ -135,6 +145,9 @@ Useful overrides:
 - `BENCH_FACE=...`
 - `BENCH_AUDIO=...`
 - `BENCH_CHECKPOINT=...`
+- `PUBLISH_CHECKPOINT=...`
+- `PUBLISH_FACE_LIST="... ..."`
+- `PUBLISH_AUDIO=...`
 - `ARTIFACTS_OUTPUT_DIR=training/output/<run_name>`
 - `ARTIFACTS_RUN_KIND=syncnet|generator|pipeline|smoke|auto`
 - `ARTIFACTS_RUN_NAME=<drive_subdir_name>`
