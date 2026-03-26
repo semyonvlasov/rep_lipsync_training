@@ -362,8 +362,8 @@ def main():
             "CUDA opts: "
             f"tf32={torch.backends.cuda.matmul.allow_tf32}, "
             f"cudnn_benchmark={torch.backends.cudnn.benchmark}, "
-            f"persistent_workers={loader_kwargs.get('persistent_workers', False)}, "
-            f"prefetch_factor={loader_kwargs.get('prefetch_factor', '-')}"
+            f"persistent_workers={cfg['data'].get('persistent_workers', False)}, "
+            f"prefetch_factor={cfg['data'].get('prefetch_factor', '-')}"
         )
     log(f"AMP: {use_amp}, Grad clip: {cfg['training']['gradient_clip']}")
     max_batches_per_epoch = cfg["training"].get("max_batches_per_epoch", 0)
