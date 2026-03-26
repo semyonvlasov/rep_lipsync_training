@@ -54,6 +54,11 @@ def parse_args():
     parser.add_argument("--max-items", type=int, default=64)
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--device", default="cpu", choices=("cpu", "cuda"))
+    parser.add_argument(
+        "--cached-only",
+        action="store_true",
+        help="Skip any lazy entries whose frames/mel caches do not already exist",
+    )
     return parser.parse_args()
 
 
@@ -86,11 +91,24 @@ def build_dataset(cfg: dict, speaker_allowlist: List[str]) -> LipSyncDataset:
     return dataset
 
 
-def choose_sample_specs(dataset: LipSyncDataset, max_items: int, max_shift: int) -> List[dict]:
+def _entry_has_materialized_cache(dataset: LipSyncDataset, speaker_key) -> bool:
+    entry = dataset._entries.get(speaker_key)
+    if entry is None:
+        return False
+    if entry["type"] == "processed":
+        return os.path.exists(entry["frames_path"]) and os.path.exists(entry["mel_path"])
+    return os.path.exists(entry["frames_path"]) and os.path.exists(entry["mel_path"])
+
+
+def choose_sample_specs(
+    dataset: LipSyncDataset, max_items: int, max_shift: int, cached_only: bool
+) -> List[dict]:
     specs: List[dict] = []
     total = min(len(dataset.speakers), max_items)
     for idx in range(total):
         speaker_key = dataset.speakers[idx]
+        if cached_only and not _entry_has_materialized_cache(dataset, speaker_key):
+            continue
         frames, mel_chunks, _ = dataset._load_speaker(speaker_key)
         n_frames = min(len(frames), len(mel_chunks))
         if n_frames < (dataset.syncnet_T + max_shift + 2):
@@ -106,6 +124,8 @@ def choose_sample_specs(dataset: LipSyncDataset, max_items: int, max_shift: int)
         if foreign_idx == idx:
             continue
         foreign_key = dataset.speakers[foreign_idx]
+        if cached_only and not _entry_has_materialized_cache(dataset, foreign_key):
+            continue
         foreign_frames, foreign_mel_chunks, _ = dataset._load_speaker(foreign_key)
         foreign_n_frames = min(len(foreign_frames), len(foreign_mel_chunks))
         if foreign_n_frames < (dataset.syncnet_T + 2):
@@ -155,7 +175,7 @@ def main():
     max_shift = max(shift_frames)
 
     dataset = build_dataset(cfg, allowlist)
-    specs = choose_sample_specs(dataset, args.max_items, max_shift)
+    specs = choose_sample_specs(dataset, args.max_items, max_shift, args.cached_only)
 
     teachers = {}
     for name, path in (
@@ -207,6 +227,7 @@ def main():
     summary = {
         "subset_items": len(specs),
         "shift_frames": shift_frames,
+        "cached_only": bool(args.cached_only),
         "teachers": {},
     }
     for teacher_name, teacher_metrics in metrics.items():
