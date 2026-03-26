@@ -164,6 +164,11 @@ def sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, face_sequences):
     return F.cosine_similarity(audio_emb, video_emb)
 
 
+def official_sync_loss_from_cosine(cos_sim):
+    targets = torch.ones((cos_sim.size(0), 1), device=cos_sim.device)
+    return F.binary_cross_entropy(cos_sim.unsqueeze(1), targets)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
@@ -351,9 +356,9 @@ def main():
                 pred_lower = lower_half(pred_face)
                 gt_lower = lower_half(gt)
 
-                # Lower-half reconstruction is the primary teacher. The upper half
-                # is already mostly available through the masked target input.
-                l1 = F.l1_loss(pred_lower, gt_lower) * loss_cfg["l1"]
+                # Match the reference Wav2Lip objective: reconstruct the full
+                # face patch, not only the lower half.
+                l1 = F.l1_loss(pred_face, gt) * loss_cfg["l1"]
 
                 # Perceptual loss
                 perc = torch.tensor(0.0, device=device)
@@ -370,7 +375,7 @@ def main():
                 if use_sync and loss_cfg["sync"] > 0:
                     cos_sim = sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, pred_face)
                     sync_reward = cos_sim.mean()
-                    sync_loss = (1 - cos_sim).mean() * loss_cfg["sync"]
+                    sync_loss = official_sync_loss_from_cosine(cos_sim)
 
                 # GAN loss
                 gan_g_loss = torch.tensor(0.0, device=device)
@@ -388,7 +393,9 @@ def main():
                     tv_w = (pred_alpha[..., :, 1:] - pred_alpha[..., :, :-1]).abs().mean()
                     alpha_loss = (tv_h + tv_w) * loss_cfg["alpha_reg"]
 
-                g_loss = l1 + perc + sync_loss + gan_g_loss + alpha_loss
+                sync_wt = loss_cfg["sync"] if use_sync else 0.0
+                recon_wt = max(0.0, 1.0 - sync_wt)
+                g_loss = (recon_wt * l1) + (sync_wt * sync_loss) + perc + gan_g_loss + alpha_loss
 
             if scaler:
                 scaler.scale(g_loss).backward()

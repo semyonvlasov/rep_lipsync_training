@@ -626,9 +626,12 @@ class LipSyncDataset(Dataset):
             axis=0,
         )
 
+        # Match the reference Wav2Lip generator path:
+        # - indiv_mels are offset by -1 frame across the 5-frame window
+        # - mel_input for the sync loss is anchored at the window start
         mel_indices = [min(max(start - 1 + t, 0), len(mel_chunks) - 1) for t in range(T)]
         indiv_mels = np.stack([mel_chunks[idx] for idx in mel_indices], axis=0)[:, np.newaxis]
-        mel_input = mel_chunks[min(start + T // 2, len(mel_chunks) - 1)][np.newaxis]
+        mel_input = mel_chunks[min(start, len(mel_chunks) - 1)][np.newaxis]
 
         return (
             torch.from_numpy(np.ascontiguousarray(face_input)),

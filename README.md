@@ -1,6 +1,7 @@
 # rep_lipsync_training
 
-Training-only repository for a LipSync generator + SyncNet teacher workflow.
+Training-focused repository for a LipSync generator + SyncNet teacher workflow,
+plus the official Wav2Lip benchmark path used for report baselines.
 
 This repo intentionally keeps only the current training pipeline, configs,
 orchestration scripts, handoffs, and deployment helpers. Runtime data,
@@ -10,8 +11,7 @@ checkpoints, archives, and output artifacts are excluded from git.
 
 - `training/configs`
   Current configs for the latest mixed `HDTF + TalkVid` training flow, the
-  dedicated `SyncNet` recipe, local validation, and generator teacher
-  comparison runs.
+  dedicated `SyncNet` recipe, and generator teacher comparison runs.
 - `training/data`
   Runtime dataset code only: audio processing and dataset loaders.
 - `training/models`
@@ -26,8 +26,10 @@ checkpoints, archives, and output artifacts are excluded from git.
 - `training/workflows/train`
   Full mixed training pipeline, SyncNet snapshot training, generator teacher
   comparison, and remote sync/launch wrappers.
-- `training/workflows/deploy`
-  Generator validation plus CoreML export entrypoint.
+- `training/scripts/run_official_wav2lip_benchmark.py`
+  Official Wav2Lip-style benchmark runner:
+  `SFD -> 96x96 Wav2Lip -> paste-back -> mux audio`.
+  Checkpoints are external and are not stored in git.
 - `models/official_syncnet`
   External reference SyncNet code and SFD face detector code. Checkpoints are
   expected locally under `models/official_syncnet/checkpoints/` but are not
@@ -51,8 +53,8 @@ checkpoints, archives, and output artifacts are excluded from git.
 - teacher comparison against the official reference SyncNet
 - generator training with watchdog
 - generator teacher comparison workflow
+- official `Wav2Lip` benchmark inference path for report baselines
 - local processed-faceclip export pipeline
-- generator validation and CoreML export
 
 ## Intentionally excluded for now
 
@@ -75,6 +77,7 @@ purpose. They should be reviewed one by one before being added:
    `make smoke-lazy`
    `make train-syncnet`
    `make train-generator`
+   `make bench-wav2lip`
 
 ## Make targets
 
@@ -93,6 +96,13 @@ purpose. They should be reviewed one by one before being added:
   `training/configs/lipsync_cuda3090_hdtf_talkvid.yaml` by default and points
   at `models/official_syncnet/checkpoints/lipsync_expert.pth` unless
   overridden.
+- `make bench-wav2lip`
+  Runs the official Wav2Lip benchmark path with:
+  `SFD face detection -> 96x96 Wav2Lip -> paste-back`.
+  Required overrides:
+  `BENCH_FACE=...`
+  `BENCH_AUDIO=...`
+  `BENCH_CHECKPOINT=...`
 - `make upload-training-artifacts`
   Uploads a finished run to the shared training-artifacts Drive folder, writes
   `artifacts_upload_manifest.json`, and appends a git-tracked run entry with:
@@ -106,6 +116,9 @@ Useful overrides:
 - `SYNCNET_RESUME=...`
 - `GENERATOR_RESUME=...`
 - `SPEAKER_LIST=...`
+- `BENCH_FACE=...`
+- `BENCH_AUDIO=...`
+- `BENCH_CHECKPOINT=...`
 - `ARTIFACTS_OUTPUT_DIR=training/output/<run_name>`
 - `ARTIFACTS_RUN_KIND=syncnet|generator|pipeline|smoke|auto`
 - `ARTIFACTS_RUN_NAME=<drive_subdir_name>`
