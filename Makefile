@@ -135,6 +135,9 @@ observe-system:
 	@echo "  pid file: $(SYSTEM_WATCH_DIR)/system_watch.pid"
 	@echo "  live log:"
 	@echo "    tail -n 120 -f $(SYSTEM_WATCH_DIR)/system_watch.log"
+	@echo "  recommended remote observer:"
+	@echo "    ssh -t -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p <PORT> root@<HOST> \\"
+	@echo "      \"watch -c -n $(SYSTEM_WATCH_INTERVAL) 'tail -n 13 /root/lipsync_test/rep_lipsync_training/training/output/system_observe/system_watch.log'\""
 
 watch-syncnet-generator:
 	@if [ -z "$(SYNCNET_OUTPUT_DIR)" ]; then \
