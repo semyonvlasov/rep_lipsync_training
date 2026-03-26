@@ -18,6 +18,9 @@ import subprocess
 import time
 from datetime import datetime, timezone
 
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
 
 def detect_net_dev():
     for cand in ("eth0", "ens5", "enp1s0"):
@@ -91,6 +94,10 @@ def fmt_num(value, suffix=""):
     return f"{value:.1f}{suffix}"
 
 
+def bold(text):
+    return f"{BOLD}{text}{RESET}"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--interval", type=int, default=10, help="Snapshot interval in seconds")
@@ -103,7 +110,7 @@ def main():
     prev_rx, prev_tx = read_net_bytes(net_dev)
     prev_t = time.time()
 
-    print(f"**Observer** net={net_dev} interval={interval}s", flush=True)
+    print(f"{bold('Observer')} net={net_dev} interval={interval}s", flush=True)
     while True:
         time.sleep(interval)
         now = time.time()
@@ -119,10 +126,10 @@ def main():
 
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         print(f"[{ts}]", flush=True)
-        print("**CPU / RAM**", flush=True)
+        print(bold("CPU / RAM"), flush=True)
         print(f"cpu: {cpu_util:.1f}%", flush=True)
         print(f"ram: {ram_used:.1f} / {ram_total:.1f} MB", flush=True)
-        print("**GPU / VRAM**", flush=True)
+        print(bold("GPU / VRAM"), flush=True)
         print(f"gpu: {fmt_num(gpu['gpu_util'], '%')}", flush=True)
         print(
             f"vram: {fmt_num(gpu['vram_used_mb'])} / {fmt_num(gpu['vram_total_mb'])} MB",
@@ -130,7 +137,7 @@ def main():
         )
         print(f"power: {fmt_num(gpu['gpu_power_w'], ' W')}", flush=True)
         print(f"temp: {fmt_num(gpu['gpu_temp_c'], ' C')}", flush=True)
-        print(f"**Network ({net_dev})**", flush=True)
+        print(bold(f"Network ({net_dev})"), flush=True)
         print(f"rx: {rx_mbps:.3f} Mbps", flush=True)
         print(f"tx: {tx_mbps:.3f} Mbps", flush=True)
         print("", flush=True)
