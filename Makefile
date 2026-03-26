@@ -14,6 +14,8 @@ PREWARM_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
 PREWARM_SPEAKER_LIST ?=
 PREWARM_LOG_EVERY ?= 100
 PREWARM_MAX_ITEMS ?=
+SYSTEM_WATCH_DIR ?= $(TRAINING_ROOT)/output/system_observe
+SYSTEM_WATCH_INTERVAL ?= 10
 SYNCNET_TEACHER ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 OFFICIAL_SYNCNET_PATH ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 SYNCNET_RESUME ?=
@@ -53,7 +55,7 @@ BENCH_STATIC ?= 0
 BENCH_NOSMOOTH ?= 0
 BENCH_S3FD_PATH ?=
 
-.PHONY: help server-setup smoke-lazy train-syncnet train-generator prewarm-syncnet-cache watch-syncnet-generator bench-wav2lip upload-training-artifacts
+.PHONY: help server-setup smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -62,6 +64,7 @@ help:
 	@echo "  make train-syncnet   # run scripts/train_syncnet.py with \$$SYNCNET_CONFIG"
 	@echo "  make train-generator # run scripts/train_generator.py with \$$GENERATOR_CONFIG"
 	@echo "  make prewarm-syncnet-cache # pre-materialize lazy frames/mels into the configured cache root"
+	@echo "  make observe-system  # start a background CPU/RAM/GPU/VRAM/network observer"
 	@echo "  make watch-syncnet-generator # wait for SyncNet, benchmark all epochs vs official, then launch generator"
 	@echo "  make bench-wav2lip   # run the official Wav2Lip benchmark path (SFD + 96x96 generator)"
 	@echo "  make upload-training-artifacts # upload a finished run to Drive and append the git log"
@@ -119,6 +122,17 @@ prewarm-syncnet-cache:
 		--log-every $(PREWARM_LOG_EVERY) \
 		$(if $(PREWARM_SPEAKER_LIST),--speaker-list $(PREWARM_SPEAKER_LIST),) \
 		$(if $(PREWARM_MAX_ITEMS),--max-items $(PREWARM_MAX_ITEMS),)
+
+observe-system:
+	mkdir -p "$(SYSTEM_WATCH_DIR)"
+	pkill -f 'scripts/system_watch.py' 2>/dev/null || true
+	cd $(TRAINING_ROOT) && nohup $(PYTHON) -u scripts/system_watch.py \
+		--interval $(SYSTEM_WATCH_INTERVAL) \
+		> "$(SYSTEM_WATCH_DIR)/system_watch.log" 2>&1 & echo $$! > "$(SYSTEM_WATCH_DIR)/system_watch.pid"
+	@echo "started observe-system:"
+	@echo "  pid file: $(SYSTEM_WATCH_DIR)/system_watch.pid"
+	@echo "  live log:"
+	@echo "    tail -n 120 -f $(SYSTEM_WATCH_DIR)/system_watch.log"
 
 watch-syncnet-generator:
 	@if [ -z "$(SYNCNET_OUTPUT_DIR)" ]; then \

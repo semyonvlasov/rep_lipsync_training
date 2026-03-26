@@ -73,7 +73,9 @@ purpose. They should be reviewed one by one before being added:
    `models/official_syncnet/checkpoints/lipsync_expert.pth`
 2. On a fresh remote Linux/Vast server run:
    `make server-setup`
-3. Use one of the top-level make targets:
+3. Start the background system observer right away:
+   `make observe-system`
+4. Use one of the top-level make targets:
    `make smoke-lazy`
    `make train-syncnet`
    `make train-generator`
@@ -101,6 +103,11 @@ purpose. They should be reviewed one by one before being added:
   the current audio frontend and frame size from the config. This is useful
   after a Drive merge so the next `SyncNet` run does not spend its first
   batches decoding video and building mel caches.
+- `make observe-system`
+  Starts a background host observer that writes a readable multi-line log with
+  CPU, RAM, GPU, VRAM, power, temperature, and RX/TX throughput. Intended to
+  be started immediately after provisioning a fresh remote box and left running
+  during training.
 - `make bench-wav2lip`
   Runs the official Wav2Lip benchmark path with:
   `SFD face detection -> 96x96 Wav2Lip -> paste-back`.
@@ -123,6 +130,8 @@ Useful overrides:
 - `SPEAKER_LIST=...`
 - `PREWARM_CONFIG=...`
 - `PREWARM_SPEAKER_LIST=...`
+- `SYSTEM_WATCH_DIR=...`
+- `SYSTEM_WATCH_INTERVAL=10`
 - `BENCH_FACE=...`
 - `BENCH_AUDIO=...`
 - `BENCH_CHECKPOINT=...`
