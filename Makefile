@@ -125,7 +125,9 @@ prewarm-syncnet-cache:
 
 observe-system:
 	mkdir -p "$(SYSTEM_WATCH_DIR)"
-	pkill -f 'scripts/system_watch.py' 2>/dev/null || true
+	@if [ -f "$(SYSTEM_WATCH_DIR)/system_watch.pid" ]; then \
+		kill "$$(cat "$(SYSTEM_WATCH_DIR)/system_watch.pid")" 2>/dev/null || true; \
+	fi
 	cd $(TRAINING_ROOT) && nohup $(PYTHON) -u scripts/system_watch.py \
 		--interval $(SYSTEM_WATCH_INTERVAL) \
 		> "$(SYSTEM_WATCH_DIR)/system_watch.log" 2>&1 & echo $$! > "$(SYSTEM_WATCH_DIR)/system_watch.pid"
