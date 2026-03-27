@@ -110,6 +110,16 @@ def derive_generator_lazy_cache_root(sync_cfg, syncnet_output_dir, explicit_lazy
     return f"data/_lazy_cache_generator_from_{sync_run_name}"
 
 
+def derive_generator_val_speaker_list(template_config_path, explicit_val_speaker_list):
+    if explicit_val_speaker_list:
+        return explicit_val_speaker_list
+    template_dir = resolve_training_path(template_config_path).parent
+    candidate = template_dir / "val_confident_medium_allowlist_officialish.txt"
+    if candidate.exists():
+        return str(candidate)
+    return None
+
+
 def build_generator_config(sync_cfg, template_cfg, args):
     cfg = copy.deepcopy(template_cfg)
 
@@ -230,6 +240,7 @@ def main():
     parser.add_argument("--generator-epochs", type=int, default=None)
     parser.add_argument("--generator-output-dir", default=None)
     parser.add_argument("--generator-lazy-cache-root", default=None)
+    parser.add_argument("--generator-val-speaker-list", default=None)
     parser.add_argument("--generator-resume", default=None)
     parser.add_argument(
         "--extra-checkpoint",
@@ -246,6 +257,10 @@ def main():
     official_syncnet = resolve_training_path(args.official_syncnet)
     generator_template_config = resolve_training_path(args.generator_template_config)
     generator_resume = resolve_training_path(args.generator_resume) if args.generator_resume else None
+    generator_val_speaker_list = derive_generator_val_speaker_list(
+        args.generator_template_config,
+        args.generator_val_speaker_list,
+    )
 
     sync_cfg = load_yaml(syncnet_config_path)
     template_cfg = load_yaml(generator_template_config)
@@ -379,6 +394,8 @@ def main():
         "--speaker-list",
         str(speaker_snapshot),
     ]
+    if generator_val_speaker_list:
+        generator_cmd.extend(["--val-speaker-list", str(resolve_training_path(generator_val_speaker_list))])
     if generator_resume:
         if not generator_resume.exists():
             raise RuntimeError(f"Generator resume checkpoint not found: {generator_resume}")

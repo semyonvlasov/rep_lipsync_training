@@ -96,6 +96,25 @@ def update_ema(current, value, span):
     return (alpha * value) + ((1.0 - alpha) * current)
 
 
+def format_eta(seconds):
+    if seconds is None or seconds < 0:
+        return "?"
+    seconds = int(round(seconds))
+    days, rem = divmod(seconds, 24 * 3600)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def compute_remaining_eta(seconds_elapsed, units_done, units_total):
+    if seconds_elapsed <= 0 or units_done <= 0:
+        return None
+    remaining_units = max(0, units_total - units_done)
+    return (seconds_elapsed / units_done) * remaining_units
+
+
 def flatten_temporal(x):
     """(B, C, T, H, W) -> (B*T, C, H, W); passthrough for 4D tensors."""
     if x.dim() == 5:
@@ -377,6 +396,7 @@ def main():
         )
     log(f"AMP: {use_amp}, Grad clip: {cfg['training']['gradient_clip']}")
     max_batches_per_epoch = cfg["training"].get("max_batches_per_epoch", 0)
+    epoch_total_batches = min(len(loader), max_batches_per_epoch) if max_batches_per_epoch else len(loader)
     if max_batches_per_epoch:
         log(f"Max batches per epoch: {max_batches_per_epoch}")
     log("=" * 60)
@@ -400,6 +420,7 @@ def main():
         start_epoch = ck["epoch"] + 1
         log(f"Resumed from epoch {start_epoch}")
 
+    total_batches_remaining = max(0, cfg["generator"]["epochs"] - start_epoch) * epoch_total_batches
     global_step = start_epoch * len(loader)
     effective_sync_wt = loss_cfg.get("sync_initial", loss_cfg["sync"])
     official_sync_schedule = bool(loss_cfg.get("sync_official_schedule", False))
@@ -422,7 +443,13 @@ def main():
             f"start={sync_adaptive_start:.3f}, full={sync_adaptive_full:.3f}, "
             f"interval={sync_eval_interval}, eval_batches={sync_eval_batches}"
         )
+    if (official_sync_schedule or adaptive_sync_schedule) and val_loader is None:
+        log(
+            "WARNING: sync schedule is enabled but no --val-speaker-list was provided; "
+            "eval checkpoints will not run and effective_sync_wt will stay at its initial value."
+        )
 
+    training_t0 = time.time()
     for epoch in range(start_epoch, cfg["generator"]["epochs"]):
         generator.train()
         if discriminator:
@@ -562,6 +589,11 @@ def main():
                 ema100[key] = update_ema(ema100[key], value, 100)
 
             if batch_idx % 60 == 0:
+                elapsed_epoch = time.time() - t0
+                epoch_eta = compute_remaining_eta(elapsed_epoch, batches_processed, epoch_total_batches)
+                elapsed_total = time.time() - training_t0
+                completed_total = ((epoch - start_epoch) * epoch_total_batches) + batches_processed
+                full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_remaining)
                 log(f"  E{epoch} [{batch_idx}/{len(loader)}] "
                     f"l1={l1.item():.4f} perc={perc.item():.4f} "
                     f"sync={sync_loss.item():.4f} reward={sync_reward.item():.4f} "
@@ -573,6 +605,9 @@ def main():
                     f"sync={ema100['sync']:.4f} reward={ema100['sync_reward']:.4f} "
                     f"gan_g={ema100['gan_g']:.4f} gan_d={ema100['gan_d']:.4f} "
                     f"alpha={ema100['alpha']:.4f} total={ema100['total']:.4f}"
+                )
+                log(
+                    f"    eta epoch={format_eta(epoch_eta)} full={format_eta(full_eta)}"
                 )
 
             if (
@@ -625,6 +660,10 @@ def main():
         # Epoch stats
         n = max(1, batches_processed)
         elapsed = time.time() - t0
+        elapsed_total = time.time() - training_t0
+        completed_total = ((epoch - start_epoch + 1) * epoch_total_batches)
+        full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_remaining)
+        next_epoch_eta = (elapsed / n) * epoch_total_batches
         log(f"Epoch {epoch}/{cfg['generator']['epochs']}: "
             f"L1={totals['l1']/n:.4f} perc={totals['perc']/n:.4f} "
             f"sync={totals['sync']/n:.4f} reward={totals['sync_reward']/n:.4f} "
@@ -633,6 +672,7 @@ def main():
             f"({elapsed:.0f}s, {n*cfg['generator']['batch_size']/elapsed:.1f} samples/s) "
             f"lr={g_opt.param_groups[0]['lr']:.6f} sync_wt={effective_sync_wt:.4f}"
             f"{' [sync ON]' if use_sync else ' [sync OFF]'}")
+        log(f"  ETA next_epoch={format_eta(next_epoch_eta)} full={format_eta(full_eta)}")
 
         if g_scheduler:
             g_scheduler.step()

@@ -34,6 +34,25 @@ def update_ema(current, value, span):
     return (alpha * value) + ((1.0 - alpha) * current)
 
 
+def format_eta(seconds):
+    if seconds is None or seconds < 0:
+        return "?"
+    seconds = int(round(seconds))
+    days, rem = divmod(seconds, 24 * 3600)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def compute_remaining_eta(seconds_elapsed, units_done, units_total):
+    if seconds_elapsed <= 0 or units_done <= 0:
+        return None
+    remaining_units = max(0, units_total - units_done)
+    return (seconds_elapsed / units_done) * remaining_units
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
@@ -110,6 +129,9 @@ def main():
     log(f"SyncNet training: {len(dataset)} samples, {len(loader)} batches/epoch")
     log(f"Device: {device}, T={cfg['syncnet']['T']}, AMP={use_amp}")
 
+    epoch_total_batches = len(loader)
+    total_batches_remaining = max(0, cfg["syncnet"]["epochs"] - start_epoch) * epoch_total_batches
+    training_t0 = time.time()
     for epoch in range(start_epoch, cfg["syncnet"]["epochs"]):
         model.train()
         total_loss = 0
@@ -153,6 +175,12 @@ def main():
             acc_ema100 = update_ema(acc_ema100, acc, 100)
 
             if batch_idx % 50 == 0:
+                processed_batches = batch_idx + 1
+                elapsed_epoch = time.time() - t0
+                epoch_eta = compute_remaining_eta(elapsed_epoch, processed_batches, epoch_total_batches)
+                elapsed_total = time.time() - training_t0
+                completed_total = ((epoch - start_epoch) * epoch_total_batches) + processed_batches
+                full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_remaining)
                 log(
                     f"  E{epoch} [{batch_idx}/{len(loader)}] "
                     f"loss={loss.item():.4f} acc={acc:.3f}"
@@ -160,10 +188,17 @@ def main():
                 log(
                     f"    ema100 loss={loss_ema100:.4f} acc={acc_ema100:.3f}"
                 )
+                log(
+                    f"    eta epoch={format_eta(epoch_eta)} full={format_eta(full_eta)}"
+                )
 
         avg_loss = total_loss / max(1, len(loader))
         avg_acc = total_acc / max(1, len(loader))
         elapsed = time.time() - t0
+        elapsed_total = time.time() - training_t0
+        completed_total = ((epoch - start_epoch + 1) * epoch_total_batches)
+        full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_remaining)
+        next_epoch_eta = elapsed
 
         log(
             f"Epoch {epoch}: loss={avg_loss:.4f} acc={avg_acc:.3f} "
@@ -171,6 +206,9 @@ def main():
         )
         log(
             f"  Epoch {epoch} ema100: loss={loss_ema100:.4f} acc={acc_ema100:.3f}"
+        )
+        log(
+            f"  ETA next_epoch={format_eta(next_epoch_eta)} full={format_eta(full_eta)}"
         )
 
         # Save checkpoint
