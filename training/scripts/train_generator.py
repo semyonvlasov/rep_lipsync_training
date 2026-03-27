@@ -35,7 +35,12 @@ REPO_ROOT = os.path.dirname(TRAINING_ROOT)
 
 # Import our training models first (before the official reference code pollutes 'models')
 sys.path.insert(0, TRAINING_ROOT)
-from models import LipSyncGenerator, Discriminator, SyncNet as LocalSyncNet
+from models import (
+    LipSyncGenerator,
+    Discriminator,
+    OfficialQualityDiscriminator,
+    SyncNet as LocalSyncNet,
+)
 from data import LipSyncDataset
 from scripts.dataset_roots import get_dataset_roots
 
@@ -316,6 +321,7 @@ def main():
 
     img_size = cfg["model"]["img_size"]
     loss_cfg = cfg["generator"]["loss"]
+    gan_mode = loss_cfg.get("gan_mode", "official_hq")
 
     log(f"Config: img_size={img_size}, base_ch={cfg['model']['base_channels']}, device={device}")
 
@@ -349,10 +355,17 @@ def main():
     param_count = sum(p.numel() for p in generator.parameters()) / 1e6
     log(f"Generator: {param_count:.1f}M params")
 
-    discriminator = Discriminator().to(device) if loss_cfg.get("gan", 0) > 0 else None
+    discriminator = None
+    if loss_cfg.get("gan", 0) > 0:
+        if gan_mode == "official_hq":
+            discriminator = OfficialQualityDiscriminator().to(device)
+        elif gan_mode == "patch":
+            discriminator = Discriminator().to(device)
+        else:
+            raise ValueError(f"Unsupported gan_mode={gan_mode!r}; expected 'official_hq' or 'patch'")
     if discriminator:
         d_params = sum(p.numel() for p in discriminator.parameters()) / 1e6
-        log(f"Discriminator: {d_params:.1f}M params")
+        log(f"Discriminator: {d_params:.1f}M params (mode={gan_mode})")
 
     # Load frozen teacher SyncNet: either official official SyncNet or our local SyncNet
     log(f"Loading SyncNet from {args.syncnet}...")
@@ -371,10 +384,12 @@ def main():
         log("Perceptual loss disabled")
 
     # Optimizers
-    betas = tuple(cfg["generator"].get("betas", (0.9, 0.999)))
-    g_opt = torch.optim.Adam(generator.parameters(), lr=cfg["generator"]["lr"], betas=betas)
+    base_betas = tuple(cfg["generator"].get("betas", (0.9, 0.999)))
+    gan_betas = tuple(cfg["generator"].get("gan_betas", (0.5, 0.999)))
+    opt_betas = gan_betas if discriminator and gan_mode == "official_hq" else base_betas
+    g_opt = torch.optim.Adam(generator.parameters(), lr=cfg["generator"]["lr"], betas=opt_betas)
     d_opt = torch.optim.Adam(discriminator.parameters(), lr=cfg["generator"]["lr"],
-                              betas=betas) if discriminator else None
+                              betas=opt_betas) if discriminator else None
 
     use_amp = cfg["training"]["mixed_precision"] and device == "cuda"
     if device == "cuda":
@@ -385,7 +400,7 @@ def main():
     log(f"Losses: L1={loss_cfg['l1']}, perc={loss_cfg['perceptual']}, "
         f"sync={loss_cfg['sync']} (warmup={loss_cfg.get('sync_warmup_epochs', 10)}), "
         f"gan={loss_cfg.get('gan', 0)}, alpha_reg={loss_cfg.get('alpha_reg', 0)}")
-    log(f"Optimizer: Adam betas={betas}")
+    log(f"Optimizer: Adam betas={opt_betas}")
     if device == "cuda":
         log(
             "CUDA opts: "
@@ -509,11 +524,14 @@ def main():
                 # GAN loss
                 gan_g_loss = torch.tensor(0.0, device=device)
                 if discriminator and loss_cfg.get("gan", 0) > 0:
-                    lower_pred_d = flatten_temporal(pred_lower)
-                    d_pred = discriminator(lower_pred_d)
-                    gan_g_loss = F.binary_cross_entropy_with_logits(
-                        d_pred, torch.ones_like(d_pred)
-                    ) * loss_cfg["gan"]
+                    if gan_mode == "official_hq":
+                        gan_g_loss = discriminator.perceptual_forward(pred_face) * loss_cfg["gan"]
+                    else:
+                        lower_pred_d = flatten_temporal(pred_lower)
+                        d_pred = discriminator(lower_pred_d)
+                        gan_g_loss = F.binary_cross_entropy_with_logits(
+                            d_pred, torch.ones_like(d_pred)
+                        ) * loss_cfg["gan"]
 
                 # Alpha regularization
                 alpha_loss = torch.tensor(0.0, device=device)
@@ -543,16 +561,24 @@ def main():
             d_loss_val = 0
             if discriminator and loss_cfg.get("gan", 0) > 0:
                 d_opt.zero_grad(set_to_none=True)
-                lower_gt = flatten_temporal(gt_lower).detach()
-                lower_pred_d = flatten_temporal(pred_lower).detach()
+                if gan_mode == "official_hq":
+                    d_real = discriminator(gt.detach())
+                    d_fake = discriminator(pred_face.detach())
+                    d_loss = (
+                        F.binary_cross_entropy(d_real, torch.ones_like(d_real)) +
+                        F.binary_cross_entropy(d_fake, torch.zeros_like(d_fake))
+                    ) * 0.5
+                else:
+                    lower_gt = flatten_temporal(gt_lower).detach()
+                    lower_pred_d = flatten_temporal(pred_lower).detach()
 
-                d_real = discriminator(lower_gt)
-                d_fake = discriminator(lower_pred_d)
+                    d_real = discriminator(lower_gt)
+                    d_fake = discriminator(lower_pred_d)
 
-                d_loss = (
-                    F.binary_cross_entropy_with_logits(d_real, torch.ones_like(d_real)) +
-                    F.binary_cross_entropy_with_logits(d_fake, torch.zeros_like(d_fake))
-                ) * 0.5
+                    d_loss = (
+                        F.binary_cross_entropy_with_logits(d_real, torch.ones_like(d_real)) +
+                        F.binary_cross_entropy_with_logits(d_fake, torch.zeros_like(d_fake))
+                    ) * 0.5
 
                 if scaler:
                     scaler.scale(d_loss).backward()
