@@ -41,8 +41,8 @@ generator:
     sync_official_schedule: false
     sync_official_threshold: 0.75
     sync_adaptive_schedule: true
-    sync_adaptive_start: 8.0
-    sync_adaptive_full: 4.5
+    sync_adaptive_start: 4.5
+    sync_adaptive_full: 2.6
     gan_mode: "official_hq"
     gan: 0.0
     temporal: 0.0

@@ -443,8 +443,8 @@ def main():
     sync_eval_interval = int(cfg["generator"].get("eval_interval_steps", 0))
     sync_eval_batches = int(cfg["generator"].get("eval_batches", 700))
     sync_eval_threshold = float(loss_cfg.get("sync_official_threshold", 0.75))
-    sync_adaptive_start = float(loss_cfg.get("sync_adaptive_start", 8.0))
-    sync_adaptive_full = float(loss_cfg.get("sync_adaptive_full", 4.5))
+    sync_adaptive_start = float(loss_cfg.get("sync_adaptive_start", 4.5))
+    sync_adaptive_full = float(loss_cfg.get("sync_adaptive_full", 2.6))
     if official_sync_schedule:
         log(
             "Official-style sync schedule: "
