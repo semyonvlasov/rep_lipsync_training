@@ -449,6 +449,7 @@ def main():
             "eval checkpoints will not run and effective_sync_wt will stay at its initial value."
         )
 
+    sync_warmup_epochs = loss_cfg.get("sync_warmup_epochs", 10)
     training_t0 = time.time()
     for epoch in range(start_epoch, cfg["generator"]["epochs"]):
         generator.train()
@@ -460,8 +461,6 @@ def main():
         t0 = time.time()
         batches_processed = 0
         ema100 = {key: None for key in totals}
-
-        use_sync = (effective_sync_wt > 0) and epoch >= loss_cfg.get("sync_warmup_epochs", 10)
 
         for batch_idx, (face_input, indiv_mels, mel, gt) in enumerate(loader):
             non_blocking = device == "cuda"
@@ -501,7 +500,8 @@ def main():
                 #   audio: (B, 1, 80, 16) — mel chunk
                 sync_loss = torch.tensor(0.0, device=device)
                 sync_reward = torch.tensor(0.0, device=device)
-                if use_sync and effective_sync_wt > 0:
+                batch_use_sync = (effective_sync_wt > 0) and epoch >= sync_warmup_epochs
+                if batch_use_sync:
                     cos_sim = sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, pred_face)
                     sync_reward = cos_sim.mean()
                     sync_loss = official_sync_loss_from_cosine(cos_sim)
@@ -522,7 +522,7 @@ def main():
                     tv_w = (pred_alpha[..., :, 1:] - pred_alpha[..., :, :-1]).abs().mean()
                     alpha_loss = (tv_h + tv_w) * loss_cfg["alpha_reg"]
 
-                sync_wt = effective_sync_wt if use_sync else 0.0
+                sync_wt = effective_sync_wt if batch_use_sync else 0.0
                 recon_wt = max(0.0, 1.0 - sync_wt)
                 g_loss = (recon_wt * l1) + (sync_wt * sync_loss) + perc + gan_g_loss + alpha_loss
 
@@ -664,6 +664,7 @@ def main():
         completed_total = ((epoch - start_epoch + 1) * epoch_total_batches)
         full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_remaining)
         next_epoch_eta = (elapsed / n) * epoch_total_batches
+        epoch_sync_active = (effective_sync_wt > 0) and epoch >= sync_warmup_epochs
         log(f"Epoch {epoch}/{cfg['generator']['epochs']}: "
             f"L1={totals['l1']/n:.4f} perc={totals['perc']/n:.4f} "
             f"sync={totals['sync']/n:.4f} reward={totals['sync_reward']/n:.4f} "
@@ -671,7 +672,7 @@ def main():
             f"gan_d={totals['gan_d']/n:.4f} total={totals['total']/n:.4f} "
             f"({elapsed:.0f}s, {n*cfg['generator']['batch_size']/elapsed:.1f} samples/s) "
             f"lr={g_opt.param_groups[0]['lr']:.6f} sync_wt={effective_sync_wt:.4f}"
-            f"{' [sync ON]' if use_sync else ' [sync OFF]'}")
+            f"{' [sync ON]' if epoch_sync_active else ' [sync OFF]'}")
         log(f"  ETA next_epoch={format_eta(next_epoch_eta)} full={format_eta(full_eta)}")
 
         if g_scheduler:
