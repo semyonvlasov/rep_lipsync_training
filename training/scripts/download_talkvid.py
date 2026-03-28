@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -31,6 +32,23 @@ RATE_LIMIT_MARKERS = (
     "rate-limited by youtube",
     "current session has been rate-limited by youtube",
 )
+
+
+class RequestThrottle:
+    def __init__(self, min_interval_seconds: float):
+        self.min_interval_seconds = max(0.0, float(min_interval_seconds))
+        self._lock = threading.Lock()
+        self._next_allowed_ts = 0.0
+
+    def wait_turn(self) -> None:
+        if self.min_interval_seconds <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            if now < self._next_allowed_ts:
+                time.sleep(self._next_allowed_ts - now)
+                now = time.monotonic()
+            self._next_allowed_ts = now + self.min_interval_seconds
 
 
 def timestamp() -> str:
@@ -274,6 +292,7 @@ def download_clip(
     timeout: int,
     cookies_file: Optional[str],
     cookies_from_browser: Optional[str],
+    request_throttle: Optional[RequestThrottle],
 ) -> tuple[bool, str, int, Optional[str]]:
     if os.path.exists(output_path):
         try:
@@ -312,6 +331,9 @@ def download_clip(
             cmd[1:1] = ["--cookies", cookies_file]
         elif cookies_from_browser:
             cmd[1:1] = ["--cookies-from-browser", cookies_from_browser]
+
+        if request_throttle is not None:
+            request_throttle.wait_turn()
 
         subprocess.run(
             cmd,
@@ -399,6 +421,12 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--cookies-from-browser", default=os.environ.get("YTDLP_COOKIES_FROM_BROWSER"))
     parser.add_argument("--jobs", type=int, default=4, help="Concurrent yt-dlp jobs")
     parser.add_argument(
+        "--request-min-interval-seconds",
+        type=float,
+        default=1.0,
+        help="Global minimum delay between starting yt-dlp requests across all workers",
+    )
+    parser.add_argument(
         "--rate-limit-cooldown-seconds",
         type=int,
         default=600,
@@ -444,6 +472,7 @@ def main() -> int:
     target_added_bytes = int(args.target_additional_gb * (1024 ** 3))
     min_free_bytes = int(args.min_free_gb * (1024 ** 3))
     jobs = max(1, args.jobs)
+    request_throttle = RequestThrottle(args.request_min_interval_seconds)
 
     log(f"[TalkVid] variant={args.variant}")
     log(f"[TalkVid] metadata={metadata_path}")
@@ -454,6 +483,7 @@ def main() -> int:
     log(f"[TalkVid] completed_ids={len(completed_ids)}")
     log(f"[TalkVid] blocked_video_keys={len(blocked_video_keys)}")
     log(f"[TalkVid] jobs={jobs}")
+    log(f"[TalkVid] request_min_interval_seconds={args.request_min_interval_seconds:.3f}")
     log(f"[TalkVid] rate_limit_cooldown_seconds={args.rate_limit_cooldown_seconds}")
     log(f"[TalkVid] max_rate_limit_cooldowns={args.max_rate_limit_cooldowns}")
     if args.cookies_file:
@@ -611,6 +641,7 @@ def main() -> int:
                         args.timeout,
                         args.cookies_file,
                         args.cookies_from_browser,
+                        request_throttle,
                     )
                     pending[future] = (attempted, item)
 
