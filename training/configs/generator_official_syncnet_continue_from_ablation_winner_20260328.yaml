@@ -71,6 +71,6 @@ training:
   float32_matmul_precision: high
   gradient_clip: 1.0
   save_every: 1
-  latest_save_interval_steps: 10000
+  latest_save_interval_steps: 3000
   sample_every: 1
   output_dir: output/generator_medium_x96_b32_official_syncnet_continue_from_ablation_winner_20260328
