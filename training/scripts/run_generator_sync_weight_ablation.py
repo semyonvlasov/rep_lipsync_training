@@ -97,6 +97,42 @@ def save_yaml(path: Path, data: dict):
         yaml.safe_dump(data, f, sort_keys=False)
 
 
+def arm_manifest_path(manifests_dir: Path, arm_name: str) -> Path:
+    return manifests_dir / f"{arm_name}.json"
+
+
+def load_json(path: Path) -> dict:
+    with path.open() as f:
+        return json.load(f)
+
+
+def write_json(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        json.dump(data, f, indent=2)
+
+
+def arm_is_complete(manifest_path: Path) -> bool:
+    if not manifest_path.exists():
+        return False
+    try:
+        arm_manifest = load_json(manifest_path)
+    except Exception:
+        return False
+
+    checkpoint = arm_manifest.get("checkpoint")
+    benchmarks = arm_manifest.get("benchmarks") or []
+    if not checkpoint or not Path(checkpoint).exists():
+        return False
+    if not benchmarks:
+        return False
+    return all(Path(path).exists() for path in benchmarks)
+
+
+def update_top_level_manifest(path: Path, manifest: dict):
+    write_json(path, manifest)
+
+
 def latest_generator_ckpt(generator_dir: Path) -> Path:
     checkpoints = sorted(generator_dir.glob("generator_epoch*.pth"))
     if not checkpoints:
@@ -126,6 +162,7 @@ def main():
     benchmarks_root = output_root / "benchmarks"
     manifests_dir.mkdir(parents=True, exist_ok=True)
     benchmarks_root.mkdir(parents=True, exist_ok=True)
+    top_manifest_path = manifests_dir / "ablation_manifest.json"
 
     resume_ck = torch.load(resume_path, map_location="cpu", weights_only=False)
     resume_epoch = int(resume_ck["epoch"])
@@ -141,7 +178,28 @@ def main():
         "arms": [],
     }
 
+    completed_arms = {}
+    for arm_name, _teacher_kind, _sync_weight in ABlation_ARMS:
+        existing_manifest_path = arm_manifest_path(manifests_dir, arm_name)
+        if arm_is_complete(existing_manifest_path):
+            arm_manifest = load_json(existing_manifest_path)
+            completed_arms[arm_name] = arm_manifest
+            manifest["arms"].append(arm_manifest)
+
+    if completed_arms:
+        print(
+            f"[resume] found {len(completed_arms)} completed arm(s): "
+            + ", ".join(sorted(completed_arms)),
+            flush=True,
+        )
+    update_top_level_manifest(top_manifest_path, manifest)
+
     for arm_name, teacher_kind, sync_weight in ABlation_ARMS:
+        existing_manifest_path = arm_manifest_path(manifests_dir, arm_name)
+        if arm_name in completed_arms:
+            print(f"[skip] {arm_name} already complete", flush=True)
+            continue
+
         arm_run_dir = output_root / arm_name
         arm_generator_dir = arm_run_dir / "generator"
         arm_bench_dir = benchmarks_root / arm_name
@@ -218,13 +276,11 @@ def main():
             "benchmarks": benchmark_outputs,
         }
         manifest["arms"].append(arm_manifest)
-        with (manifests_dir / f"{arm_name}.json").open("w") as f:
-            json.dump(arm_manifest, f, indent=2)
+        write_json(existing_manifest_path, arm_manifest)
+        update_top_level_manifest(top_manifest_path, manifest)
 
-    manifest_path = manifests_dir / "ablation_manifest.json"
-    with manifest_path.open("w") as f:
-        json.dump(manifest, f, indent=2)
-    print(f"[done] wrote {manifest_path}", flush=True)
+    update_top_level_manifest(top_manifest_path, manifest)
+    print(f"[done] wrote {top_manifest_path}", flush=True)
 
 
 if __name__ == "__main__":
