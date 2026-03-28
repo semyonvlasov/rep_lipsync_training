@@ -77,5 +77,6 @@ training:
   mixed_precision: true
   gradient_clip: 0.0
   save_every: 5            # save checkpoint every N epochs
+  latest_save_interval_steps: 0  # overwrite generator_latest.pth every N global steps
   sample_every: 1          # generate sample images every N epochs
   output_dir: "output/training"

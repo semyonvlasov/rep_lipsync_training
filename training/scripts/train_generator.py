@@ -211,6 +211,44 @@ def compute_adaptive_sync_weight(avg_sync, start_sync, full_sync, target_sync_wt
     return target_sync_wt * progress
 
 
+def build_generator_checkpoint(
+    epoch,
+    global_step,
+    batches_processed_in_epoch,
+    checkpoint_kind,
+    effective_sync_wt,
+    generator,
+    g_opt,
+    cfg,
+    discriminator=None,
+    d_opt=None,
+    g_scheduler=None,
+):
+    ck = {
+        "epoch": int(epoch),
+        "global_step": int(global_step),
+        "batches_processed_in_epoch": int(batches_processed_in_epoch),
+        "checkpoint_kind": checkpoint_kind,
+        "effective_sync_wt": float(effective_sync_wt),
+        "generator": generator.state_dict(),
+        "g_optimizer": g_opt.state_dict(),
+        "config": cfg,
+    }
+    if discriminator:
+        ck["discriminator"] = discriminator.state_dict()
+        ck["d_optimizer"] = d_opt.state_dict()
+    if g_scheduler is not None:
+        ck["g_scheduler"] = g_scheduler.state_dict()
+    return ck
+
+
+def save_generator_checkpoint(path, **kwargs):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    ck = build_generator_checkpoint(**kwargs)
+    torch.save(ck, path)
+    print(f"  Saved {path}", flush=True)
+
+
 def load_allowlist(path):
     if not path:
         return None
@@ -425,19 +463,44 @@ def main():
         g_scheduler = None
 
     start_epoch = 0
+    resume_batches_in_epoch = 0
+    resume_kind = "fresh"
+    restored_global_step = None
+    restored_effective_sync_wt = None
     if args.resume:
-        ck = torch.load(args.resume, map_location=device)
+        ck = torch.load(args.resume, map_location=device, weights_only=False)
         generator.load_state_dict(ck["generator"])
         g_opt.load_state_dict(ck["g_optimizer"])
         if discriminator and "discriminator" in ck:
             discriminator.load_state_dict(ck["discriminator"])
             d_opt.load_state_dict(ck["d_optimizer"])
-        start_epoch = ck["epoch"] + 1
-        log(f"Resumed from epoch {start_epoch}")
+        if g_scheduler is not None and "g_scheduler" in ck:
+            g_scheduler.load_state_dict(ck["g_scheduler"])
+        resume_kind = str(ck.get("checkpoint_kind", "epoch"))
+        restored_global_step = ck.get("global_step")
+        restored_effective_sync_wt = ck.get("effective_sync_wt")
+        if resume_kind == "step":
+            start_epoch = int(ck["epoch"])
+            resume_batches_in_epoch = int(ck.get("batches_processed_in_epoch", 0))
+            log(
+                f"Resumed mid-epoch from epoch {start_epoch} "
+                f"after {resume_batches_in_epoch} batches"
+            )
+        else:
+            start_epoch = int(ck["epoch"]) + 1
+            log(f"Resumed from epoch {start_epoch}")
 
-    total_batches_remaining = max(0, cfg["generator"]["epochs"] - start_epoch) * epoch_total_batches
-    global_step = start_epoch * len(loader)
+    total_batches_planned = cfg["generator"]["epochs"] * epoch_total_batches
+    if restored_global_step is not None:
+        global_step = int(restored_global_step)
+    elif resume_kind == "step":
+        global_step = (start_epoch * len(loader)) + resume_batches_in_epoch
+    else:
+        global_step = start_epoch * len(loader)
+
     effective_sync_wt = loss_cfg.get("sync_initial", loss_cfg["sync"])
+    if restored_effective_sync_wt is not None:
+        effective_sync_wt = float(restored_effective_sync_wt)
     official_sync_schedule = bool(loss_cfg.get("sync_official_schedule", False))
     adaptive_sync_schedule = bool(loss_cfg.get("sync_adaptive_schedule", False))
     sync_eval_monitor_only = bool(loss_cfg.get("sync_eval_monitor_only", False))
@@ -446,6 +509,8 @@ def main():
     sync_eval_threshold = float(loss_cfg.get("sync_official_threshold", 0.75))
     sync_adaptive_start = float(loss_cfg.get("sync_adaptive_start", 4.5))
     sync_adaptive_full = float(loss_cfg.get("sync_adaptive_full", 2.6))
+    latest_save_interval_steps = int(cfg["training"].get("latest_save_interval_steps", 0) or 0)
+    latest_ckpt_path = os.path.join(output_dir, "generator_latest.pth")
     if official_sync_schedule:
         log(
             "Official-style sync schedule: "
@@ -465,6 +530,11 @@ def main():
             f"fixed_sync_wt={effective_sync_wt:.4f}, interval={sync_eval_interval}, "
             f"eval_batches={sync_eval_batches}"
         )
+    if latest_save_interval_steps > 0:
+        log(
+            "Latest checkpoint cadence: "
+            f"every {latest_save_interval_steps} global steps -> {latest_ckpt_path}"
+        )
     if (official_sync_schedule or adaptive_sync_schedule or sync_eval_monitor_only) and val_loader is None:
         log(
             "WARNING: sync schedule is enabled but no --val-speaker-list was provided; "
@@ -483,8 +553,14 @@ def main():
         t0 = time.time()
         batches_processed = 0
         ema100 = {key: None for key in totals}
+        epoch_resume_batches = resume_batches_in_epoch if epoch == start_epoch else 0
+        if epoch_resume_batches > 0:
+            log(f"Skipping {epoch_resume_batches} already-processed batches in epoch {epoch}")
 
         for batch_idx, (face_input, indiv_mels, mel, gt) in enumerate(loader):
+            if batch_idx < epoch_resume_batches:
+                continue
+
             non_blocking = device == "cuda"
             face_input = face_input.to(device, non_blocking=non_blocking)
             indiv_mels = indiv_mels.to(device, non_blocking=non_blocking)
@@ -607,6 +683,7 @@ def main():
             totals["total"] += g_loss.item()
             batches_processed += 1
             global_step += 1
+            effective_epoch_batches = epoch_resume_batches + batches_processed
 
             current_metrics = {
                 "l1": l1.item(),
@@ -623,10 +700,14 @@ def main():
 
             if batch_idx % 60 == 0:
                 elapsed_epoch = time.time() - t0
-                epoch_eta = compute_remaining_eta(elapsed_epoch, batches_processed, epoch_total_batches)
+                epoch_eta = compute_remaining_eta(
+                    elapsed_epoch,
+                    batches_processed,
+                    max(1, epoch_total_batches - epoch_resume_batches),
+                )
                 elapsed_total = time.time() - training_t0
-                completed_total = ((epoch - start_epoch) * epoch_total_batches) + batches_processed
-                full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_remaining)
+                completed_total = (epoch * epoch_total_batches) + effective_epoch_batches
+                full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_planned)
                 log(f"  E{epoch} [{batch_idx}/{len(loader)}] "
                     f"l1={l1.item():.4f} perc={perc.item():.4f} "
                     f"sync={sync_loss.item():.4f} reward={sync_reward.item():.4f} "
@@ -686,7 +767,23 @@ def main():
                                 f"full={sync_adaptive_full:.4f})"
                             )
 
-            if max_batches_per_epoch and batches_processed >= max_batches_per_epoch:
+            if latest_save_interval_steps > 0 and global_step % latest_save_interval_steps == 0:
+                save_generator_checkpoint(
+                    latest_ckpt_path,
+                    epoch=epoch,
+                    global_step=global_step,
+                    batches_processed_in_epoch=effective_epoch_batches,
+                    checkpoint_kind="step",
+                    effective_sync_wt=effective_sync_wt,
+                    generator=generator,
+                    g_opt=g_opt,
+                    cfg=cfg,
+                    discriminator=discriminator,
+                    d_opt=d_opt,
+                    g_scheduler=g_scheduler,
+                )
+
+            if max_batches_per_epoch and effective_epoch_batches >= max_batches_per_epoch:
                 log(f"  Reached max_batches_per_epoch={max_batches_per_epoch}, ending epoch early")
                 break
 
@@ -694,9 +791,9 @@ def main():
         n = max(1, batches_processed)
         elapsed = time.time() - t0
         elapsed_total = time.time() - training_t0
-        completed_total = ((epoch - start_epoch + 1) * epoch_total_batches)
-        full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_remaining)
-        next_epoch_eta = (elapsed / n) * epoch_total_batches
+        completed_total = ((epoch + 1) * epoch_total_batches)
+        full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_planned)
+        next_epoch_eta = (elapsed / n) * epoch_total_batches if n > 0 else None
         epoch_sync_active = (effective_sync_wt > 0) and epoch >= sync_warmup_epochs
         log(f"Epoch {epoch}/{cfg['generator']['epochs']}: "
             f"L1={totals['l1']/n:.4f} perc={totals['perc']/n:.4f} "
@@ -714,17 +811,35 @@ def main():
         # Save checkpoint
         if (epoch + 1) % cfg["training"]["save_every"] == 0 or epoch == cfg["generator"]["epochs"] - 1:
             ck_path = os.path.join(output_dir, f"generator_epoch{epoch:03d}.pth")
-            ck = {
-                "epoch": epoch,
-                "generator": generator.state_dict(),
-                "g_optimizer": g_opt.state_dict(),
-                "config": cfg,
-            }
-            if discriminator:
-                ck["discriminator"] = discriminator.state_dict()
-                ck["d_optimizer"] = d_opt.state_dict()
-            torch.save(ck, ck_path)
-            print(f"  Saved {ck_path}")
+            save_generator_checkpoint(
+                ck_path,
+                epoch=epoch,
+                global_step=global_step,
+                batches_processed_in_epoch=epoch_total_batches,
+                checkpoint_kind="epoch",
+                effective_sync_wt=effective_sync_wt,
+                generator=generator,
+                g_opt=g_opt,
+                cfg=cfg,
+                discriminator=discriminator,
+                d_opt=d_opt,
+                g_scheduler=g_scheduler,
+            )
+            if latest_save_interval_steps > 0:
+                save_generator_checkpoint(
+                    latest_ckpt_path,
+                    epoch=epoch,
+                    global_step=global_step,
+                    batches_processed_in_epoch=epoch_total_batches,
+                    checkpoint_kind="epoch",
+                    effective_sync_wt=effective_sync_wt,
+                    generator=generator,
+                    g_opt=g_opt,
+                    cfg=cfg,
+                    discriminator=discriminator,
+                    d_opt=d_opt,
+                    g_scheduler=g_scheduler,
+                )
 
         # Save sample images
         if (epoch + 1) % cfg["training"]["sample_every"] == 0:
