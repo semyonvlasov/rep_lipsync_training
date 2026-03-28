@@ -440,6 +440,7 @@ def main():
     effective_sync_wt = loss_cfg.get("sync_initial", loss_cfg["sync"])
     official_sync_schedule = bool(loss_cfg.get("sync_official_schedule", False))
     adaptive_sync_schedule = bool(loss_cfg.get("sync_adaptive_schedule", False))
+    sync_eval_monitor_only = bool(loss_cfg.get("sync_eval_monitor_only", False))
     sync_eval_interval = int(cfg["generator"].get("eval_interval_steps", 0))
     sync_eval_batches = int(cfg["generator"].get("eval_batches", 700))
     sync_eval_threshold = float(loss_cfg.get("sync_official_threshold", 0.75))
@@ -458,7 +459,13 @@ def main():
             f"start={sync_adaptive_start:.3f}, full={sync_adaptive_full:.3f}, "
             f"interval={sync_eval_interval}, eval_batches={sync_eval_batches}"
         )
-    if (official_sync_schedule or adaptive_sync_schedule) and val_loader is None:
+    elif sync_eval_monitor_only:
+        log(
+            "Sync eval monitor-only: "
+            f"fixed_sync_wt={effective_sync_wt:.4f}, interval={sync_eval_interval}, "
+            f"eval_batches={sync_eval_batches}"
+        )
+    if (official_sync_schedule or adaptive_sync_schedule or sync_eval_monitor_only) and val_loader is None:
         log(
             "WARNING: sync schedule is enabled but no --val-speaker-list was provided; "
             "eval checkpoints will not run and effective_sync_wt will stay at its initial value."
@@ -637,7 +644,7 @@ def main():
                 )
 
             if (
-                (official_sync_schedule or adaptive_sync_schedule)
+                (official_sync_schedule or adaptive_sync_schedule or sync_eval_monitor_only)
                 and val_loader is not None
                 and sync_eval_interval > 0
                 and global_step % sync_eval_interval == 0
