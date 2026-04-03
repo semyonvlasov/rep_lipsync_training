@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-Export a directory of short talking-head videos into trimmed 256x256 faceclip
-videos with mono 16kHz audio and processing metadata.
+Export a directory of talking-head videos into trimmed faceclip videos with
+mono 16kHz audio and processing metadata.
+
+Long source videos are segmented before face export:
+  - if remaining_frames <= max_frames: keep as one segment
+  - if remaining_frames <= 2 * max_frames: split the remainder in half
+  - otherwise cut max_frames and continue on the remainder
 
 Output layout:
   output_dir/
@@ -67,16 +72,21 @@ def append_jsonl(path: Path, payload: dict) -> None:
 def load_json(path: Path):
     if not path.exists():
         return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
-def serialize_detection_records(detections):
+def serialize_detection_records(detections, frame_offset: int = 0):
     serialized = []
     for record in detections or []:
         raw_bbox = record.get("raw_bbox")
         bbox = record.get("bbox")
         serialized.append(
             {
-                "frame_idx": int(record.get("frame_idx", -1)),
+                "frame_idx": int(record.get("frame_idx", -1)) + int(frame_offset),
                 "raw_bbox": None if raw_bbox is None else [int(v) for v in raw_bbox],
                 "bbox": None if bbox is None else [int(v) for v in bbox],
                 "reason": str(record.get("reason", "")),
@@ -88,11 +98,6 @@ def serialize_detection_records(detections):
             }
         )
     return serialized
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except Exception:
-        return None
 
 
 def sample_complete(output_dir: Path, name: str, ffmpeg_bin: str) -> bool:
@@ -126,6 +131,77 @@ def iter_videos(input_dir: Path):
     for path in sorted(input_dir.glob("*.mp4")):
         if path.is_file():
             yield path
+
+
+def probe_video(path: Path, fallback_fps: float) -> tuple[float, int]:
+    cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        raise RuntimeError(f"video_open_failed: {path}")
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or float(fallback_fps)
+        frame_count = int(round(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0))
+        if frame_count > 0:
+            return float(fps), frame_count
+        count = 0
+        while True:
+            read_ok, _ = cap.read()
+            if not read_ok:
+                break
+            count += 1
+        return float(fps), count
+    finally:
+        cap.release()
+
+
+def load_frame_range(video_path: Path, start_frame: int, end_frame: int):
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"video_open_failed: {video_path}")
+    frames = []
+    try:
+        if start_frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, float(start_frame))
+        frame_idx = int(start_frame)
+        while frame_idx < int(end_frame):
+            read_ok, frame = cap.read()
+            if not read_ok:
+                break
+            frames.append(frame)
+            frame_idx += 1
+    finally:
+        cap.release()
+    return frames
+
+
+def compute_segment_ranges(total_frames: int, max_frames: int) -> list[tuple[int, int]]:
+    total_frames = int(total_frames)
+    max_frames = max(1, int(max_frames))
+    if total_frames <= 0:
+        return []
+
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    remaining = total_frames
+    while remaining > 0:
+        if remaining <= max_frames:
+            ranges.append((start, start + remaining))
+            break
+        if remaining <= (2 * max_frames):
+            first = remaining // 2
+            second = remaining - first
+            ranges.append((start, start + first))
+            ranges.append((start + first, start + first + second))
+            break
+        ranges.append((start, start + max_frames))
+        start += max_frames
+        remaining = total_frames - start
+    return ranges
+
+
+def build_segment_name(base_name: str, segment_index: int, segment_count: int) -> str:
+    if int(segment_count) <= 1:
+        return base_name
+    return f"{base_name}_part{int(segment_index):03d}"
 
 
 def detect_dataset_kind(archive_hint: str, input_dir: Path, explicit_kind: str) -> str:
@@ -254,29 +330,71 @@ def normalize_if_needed(input_video: Path, normalized_path: Path, args) -> tuple
     return True, f"normalized encoder={encoder} detail={detail}"
 
 
-def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset_kind: str, args):
-    name = video_path.stem
-    if sample_complete(output_dir, name, args.ffmpeg_bin):
-        return "skip", f"{name}: already exported"
+def _segment_result(
+    *,
+    name: str,
+    status: str,
+    message: str,
+    tier: str | None,
+    segment_index: int,
+    segment_count: int,
+    segment_start_frame: int,
+    segment_end_frame: int,
+) -> dict:
+    return {
+        "name": name,
+        "status": status,
+        "message": message,
+        "tier": tier,
+        "segment_index": int(segment_index),
+        "segment_count": int(segment_count),
+        "source_segment_start_frame": int(segment_start_frame),
+        "source_segment_end_frame": int(segment_end_frame),
+    }
 
-    normalized_path = normalized_dir / f"{name}.mp4"
-    ok, normalize_detail = normalize_if_needed(video_path, normalized_path, args)
-    if not ok:
-        return "fail", f"{name}: {normalize_detail}"
+
+def export_segment(
+    *,
+    video_path: Path,
+    normalized_path: Path,
+    output_dir: Path,
+    dataset_kind: str,
+    source_meta,
+    normalize_detail: str,
+    source_fps: float,
+    source_total_frames: int,
+    frames,
+    segment_name: str,
+    segment_index: int,
+    segment_count: int,
+    segment_start_frame: int,
+    segment_end_exclusive: int,
+    args,
+) -> dict:
+    if sample_complete(output_dir, segment_name, args.ffmpeg_bin):
+        return _segment_result(
+            name=segment_name,
+            status="skip",
+            message=f"{segment_name}: already exported",
+            tier=None,
+            segment_index=segment_index,
+            segment_count=segment_count,
+            segment_start_frame=segment_start_frame,
+            segment_end_frame=segment_end_exclusive - 1,
+        )
 
     t0 = time.time()
-    cap = cv2.VideoCapture(str(normalized_path))
-    fps = cap.get(cv2.CAP_PROP_FPS) or float(args.fps)
-    frames = []
-    while len(frames) < args.max_frames:
-        read_ok, frame = cap.read()
-        if not read_ok:
-            break
-        frames.append(frame)
-    cap.release()
-
     if len(frames) < 25:
-        return "discard", f"{name}: too_short ({len(frames)} frames)"
+        return _segment_result(
+            name=segment_name,
+            status="discard",
+            message=f"{segment_name}: too_short ({len(frames)} frames)",
+            tier=None,
+            segment_index=segment_index,
+            segment_count=segment_count,
+            segment_start_frame=segment_start_frame,
+            segment_end_frame=segment_end_exclusive - 1,
+        )
 
     try:
         track = build_face_track(
@@ -292,18 +410,49 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
             min_detector_score=args.min_detector_score,
         )
     except Exception as exc:
-        return "fail", f"{name}: detector_fail ({type(exc).__name__}: {exc})"
+        return _segment_result(
+            name=segment_name,
+            status="fail",
+            message=f"{segment_name}: detector_fail ({type(exc).__name__}: {exc})",
+            tier=None,
+            segment_index=segment_index,
+            segment_count=segment_count,
+            segment_start_frame=segment_start_frame,
+            segment_end_frame=segment_end_exclusive - 1,
+        )
 
     if not track["ok"]:
-        return "discard", f"{name}: {track['status']}"
+        return _segment_result(
+            name=segment_name,
+            status="discard",
+            message=f"{segment_name}: {track['status']}",
+            tier=None,
+            segment_index=segment_index,
+            segment_count=segment_count,
+            segment_start_frame=segment_start_frame,
+            segment_end_frame=segment_end_exclusive - 1,
+        )
     if track["bad_sample"]:
-        return "discard", f"{name}: bad_sample reasons={','.join(track['bad_reasons'])}"
+        return _segment_result(
+            name=segment_name,
+            status="discard",
+            message=f"{segment_name}: bad_sample reasons={','.join(track['bad_reasons'])}",
+            tier=None,
+            segment_index=segment_index,
+            segment_count=segment_count,
+            segment_start_frame=segment_start_frame,
+            segment_end_frame=segment_end_exclusive - 1,
+        )
 
-    trim_start = track["trim_start"]
-    trim_end = track["trim_end"]
+    trim_start = int(track["trim_start"])
+    trim_end = int(track["trim_end"])
     trimmed_frames = frames[trim_start : trim_end + 1]
     trimmed_bboxes = track["bboxes"]
     trimmed_indices = track["frame_indices"]
+    absolute_trim_start = int(segment_start_frame + trim_start)
+    absolute_trim_end = int(segment_start_frame + trim_end)
+    absolute_trimmed_indices = [int(segment_start_frame + v) for v in trimmed_indices.tolist()]
+
     effective_resize_device = resolve_export_resize_device(args.resize_device)
     crops_arr = resize_face_crops(
         trimmed_frames,
@@ -312,7 +461,6 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
         resize_device=effective_resize_device,
     )
 
-    source_meta = load_json(video_path.with_suffix(".json"))
     if dataset_kind == "talkvid":
         tier, tier_reasons = classify_sample(
             {
@@ -323,33 +471,51 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
             source_meta or {},
         )
         if tier == "rejected":
-            return "discard", f"{name}: rejected_by_tier reasons={','.join(tier_reasons)}"
+            return _segment_result(
+                name=segment_name,
+                status="discard",
+                message=f"{segment_name}: rejected_by_tier reasons={','.join(tier_reasons)}",
+                tier=None,
+                segment_index=segment_index,
+                segment_count=segment_count,
+                segment_start_frame=segment_start_frame,
+                segment_end_frame=segment_end_exclusive - 1,
+            )
     else:
         tier = "confident"
         tier_reasons = ["curated_hdtf"]
 
-    sample_tmp_dir = output_dir / ".tmp" / name
+    sample_tmp_dir = output_dir / ".tmp" / segment_name
     sample_tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp_video_only = sample_tmp_dir / "video_only.mp4"
     tmp_wav = sample_tmp_dir / "audio.wav"
-    tmp_final = sample_tmp_dir / f"{name}.mp4"
-    tmp_meta = sample_tmp_dir / f"{name}.json"
-    tmp_detections = sample_tmp_dir / f"{name}.detections.json"
+    tmp_final = sample_tmp_dir / f"{segment_name}.mp4"
+    tmp_meta = sample_tmp_dir / f"{segment_name}.json"
+    tmp_detections = sample_tmp_dir / f"{segment_name}.detections.json"
 
     try:
         write_video_only_mp4(crops_arr, fps=float(args.fps), output_path=tmp_video_only)
-        trim_duration = len(trimmed_frames) / float(fps)
+        trim_duration = len(trimmed_frames) / float(source_fps)
         audio_ok, audio_detail = extract_audio_wav_detailed(
             normalized_path,
             tmp_wav,
             sample_rate=16000,
-            start_time=trim_start / float(fps),
+            start_time=absolute_trim_start / float(source_fps),
             duration=trim_duration,
             ffmpeg_bin=args.ffmpeg_bin,
             ffmpeg_threads=args.ffmpeg_threads,
         )
         if not audio_ok:
-            return "fail", f"{name}: audio_fail detail={audio_detail}"
+            return _segment_result(
+                name=segment_name,
+                status="fail",
+                message=f"{segment_name}: audio_fail detail={audio_detail}",
+                tier=None,
+                segment_index=segment_index,
+                segment_count=segment_count,
+                segment_start_frame=segment_start_frame,
+                segment_end_frame=segment_end_exclusive - 1,
+            )
 
         mux_video_and_audio(
             tmp_video_only,
@@ -363,16 +529,22 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
         )
         sample_tmp_dir.mkdir(parents=True, exist_ok=True)
         meta = {
-            "name": name,
+            "name": segment_name,
             "source_dataset": dataset_kind,
             "source_archive": args.source_archive,
             "source_video": video_path.name,
             "source_sidecar_present": source_meta is not None,
             "source_meta": source_meta,
             "fps": float(args.fps),
-            "source_fps": float(fps),
+            "source_fps": float(source_fps),
+            "source_total_frames": int(source_total_frames),
             "n_frames": int(crops_arr.shape[0]),
             "img_size": int(args.size),
+            "source_segment_index": int(segment_index),
+            "source_segment_count": int(segment_count),
+            "source_segment_start_frame": int(segment_start_frame),
+            "source_segment_end_frame": int(segment_end_exclusive - 1),
+            "source_segment_n_frames": int(segment_end_exclusive - segment_start_frame),
             "detector_backend": args.detector_backend,
             "detector_device": resolve_detector_device(args.detector_backend, args.detector_device),
             "detector_batch_size": int(args.detector_batch_size),
@@ -385,9 +557,11 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
             "video_encoder": args.video_encoder,
             "normalized_video_bitrate": args.normalized_video_bitrate,
             "video_bitrate": args.video_bitrate,
-            "trim_start_frame": int(trim_start),
-            "trim_end_frame": int(trim_end),
-            "trimmed_frame_indices": [int(v) for v in trimmed_indices.tolist()],
+            "segment_trim_start_frame": int(trim_start),
+            "segment_trim_end_frame": int(trim_end),
+            "trim_start_frame": int(absolute_trim_start),
+            "trim_end_frame": int(absolute_trim_end),
+            "trimmed_frame_indices": absolute_trimmed_indices,
             "bad_sample": False,
             "bad_reasons": [],
             "quality": track["quality"],
@@ -401,8 +575,13 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
         with open(tmp_detections, "w") as f:
             json.dump(
                 {
-                    "name": name,
+                    "name": segment_name,
                     "source_video": video_path.name,
+                    "source_total_frames": int(source_total_frames),
+                    "source_segment_index": int(segment_index),
+                    "source_segment_count": int(segment_count),
+                    "source_segment_start_frame": int(segment_start_frame),
+                    "source_segment_end_frame": int(segment_end_exclusive - 1),
                     "detector_backend": args.detector_backend,
                     "detector_device": resolve_detector_device(args.detector_backend, args.detector_device),
                     "detector_batch_size": int(args.detector_batch_size),
@@ -413,7 +592,10 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
                     "smooth_window": int(args.smooth_window),
                     "detect_every": int(args.detect_every),
                     "sampled_frames": int(len(track["detections"])),
-                    "detections": serialize_detection_records(track["detections"]),
+                    "detections": serialize_detection_records(
+                        track["detections"],
+                        frame_offset=segment_start_frame,
+                    ),
                 },
                 f,
                 ensure_ascii=False,
@@ -421,9 +603,9 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
 
         tier_dir = output_dir / tier
         tier_dir.mkdir(parents=True, exist_ok=True)
-        final_mp4 = tier_dir / f"{name}.mp4"
-        final_meta = tier_dir / f"{name}.json"
-        final_detections = tier_dir / f"{name}.detections.json"
+        final_mp4 = tier_dir / f"{segment_name}.mp4"
+        final_meta = tier_dir / f"{segment_name}.json"
+        final_detections = tier_dir / f"{segment_name}.detections.json"
         os.replace(tmp_final, final_mp4)
         os.replace(tmp_meta, final_meta)
         os.replace(tmp_detections, final_detections)
@@ -432,13 +614,72 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
 
     elapsed = time.time() - t0
     details = (
-        f"{name}: ok frames={crops_arr.shape[0]} trim={trim_start}:{trim_end} "
+        f"{segment_name}: ok frames={crops_arr.shape[0]} "
+        f"source_range={segment_start_frame}:{segment_end_exclusive - 1} "
+        f"trim={absolute_trim_start}:{absolute_trim_end} "
         f"ratio={track['quality'].get('kept_ratio', 0.0):.3f} "
         f"cov={track['quality'].get('detection_coverage', 0.0):.3f} "
-        f"tier={tier} "
-        f"({elapsed:.1f}s)"
+        f"tier={tier} ({elapsed:.1f}s)"
     )
-    return "ok", details
+    return _segment_result(
+        name=segment_name,
+        status="ok",
+        message=details,
+        tier=tier,
+        segment_index=segment_index,
+        segment_count=segment_count,
+        segment_start_frame=segment_start_frame,
+        segment_end_frame=segment_end_exclusive - 1,
+    )
+
+
+def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset_kind: str, args):
+    base_name = video_path.stem
+    normalized_path = normalized_dir / f"{base_name}.mp4"
+    ok, normalize_detail = normalize_if_needed(video_path, normalized_path, args)
+    if not ok:
+        return [
+            _segment_result(
+                name=base_name,
+                status="fail",
+                message=f"{base_name}: {normalize_detail}",
+                tier=None,
+                segment_index=1,
+                segment_count=1,
+                segment_start_frame=0,
+                segment_end_frame=-1,
+            )
+        ]
+
+    source_fps, source_total_frames = probe_video(normalized_path, float(args.fps))
+    segment_ranges = compute_segment_ranges(source_total_frames, int(args.max_frames))
+    source_meta = load_json(video_path.with_suffix(".json"))
+    segment_count = len(segment_ranges)
+    results = []
+    for segment_zero_idx, (segment_start, segment_end) in enumerate(segment_ranges):
+        segment_index = segment_zero_idx + 1
+        segment_name = build_segment_name(base_name, segment_index, segment_count)
+        frames = load_frame_range(normalized_path, segment_start, segment_end)
+        results.append(
+            export_segment(
+                video_path=video_path,
+                normalized_path=normalized_path,
+                output_dir=output_dir,
+                dataset_kind=dataset_kind,
+                source_meta=source_meta,
+                normalize_detail=normalize_detail,
+                source_fps=source_fps,
+                source_total_frames=source_total_frames,
+                frames=frames,
+                segment_name=segment_name,
+                segment_index=segment_index,
+                segment_count=segment_count,
+                segment_start_frame=segment_start,
+                segment_end_exclusive=segment_end,
+                args=args,
+            )
+        )
+    return results
 
 
 def main() -> int:
@@ -451,7 +692,7 @@ def main() -> int:
     parser.add_argument("--input-is-normalized", action="store_true", help="Treat input videos as already normalized 25fps/16k clips")
     parser.add_argument("--size", type=int, default=256)
     parser.add_argument("--fps", type=int, default=25)
-    parser.add_argument("--max-frames", type=int, default=750)
+    parser.add_argument("--max-frames", type=int, default=750, help="Maximum source frames per exported segment")
     parser.add_argument("--detect-every", type=int, default=10)
     parser.add_argument("--smooth-window", type=int, default=9)
     parser.add_argument("--smoothing-style", choices=["legacy_centered", "official_inference", "none"], default="official_inference")
@@ -518,34 +759,51 @@ def main() -> int:
     videos = list(iter_videos(input_dir))
     log(f"[FaceclipExport] videos={len(videos)}")
 
+    total_segments = 0
     for idx, video_path in enumerate(videos, start=1):
         try:
-            status, message = export_one(video_path, output_dir, normalized_dir, dataset_kind, args)
+            segment_results = export_one(video_path, output_dir, normalized_dir, dataset_kind, args)
         except Exception as exc:
-            status = "fail"
-            message = f"{video_path.stem}: unexpected_fail ({type(exc).__name__}: {exc})"
-        counters[status] += 1
-        tier = None
-        if status == "ok":
-            for candidate_tier in ("confident", "medium", "unconfident"):
-                if (output_dir / candidate_tier / f"{video_path.stem}.json").exists():
-                    tier = candidate_tier
-                    counters[candidate_tier] += 1
-                    break
-        log(f"[FaceclipExport] [{idx}/{len(videos)}] {message}")
-        append_jsonl(
-            manifest_path,
-            {
-                "ts": timestamp(),
-                "index": idx,
-                "total": len(videos),
-                "name": video_path.stem,
-                "status": status,
-                "tier": tier,
-                "message": message,
-                "source_video": video_path.name,
-            },
-        )
+            segment_results = [
+                _segment_result(
+                    name=video_path.stem,
+                    status="fail",
+                    message=f"{video_path.stem}: unexpected_fail ({type(exc).__name__}: {exc})",
+                    tier=None,
+                    segment_index=1,
+                    segment_count=1,
+                    segment_start_frame=0,
+                    segment_end_frame=-1,
+                )
+            ]
+        total_segments += len(segment_results)
+        for result in segment_results:
+            status = result["status"]
+            tier = result.get("tier")
+            counters[status] += 1
+            if status == "ok" and tier in ("confident", "medium", "unconfident"):
+                counters[tier] += 1
+            log(
+                f"[FaceclipExport] [{idx}/{len(videos)}]"
+                f"[{result['segment_index']}/{result['segment_count']}] {result['message']}"
+            )
+            append_jsonl(
+                manifest_path,
+                {
+                    "ts": timestamp(),
+                    "index": idx,
+                    "total": len(videos),
+                    "segment_index": result["segment_index"],
+                    "segment_count": result["segment_count"],
+                    "name": result["name"],
+                    "status": status,
+                    "tier": tier,
+                    "message": result["message"],
+                    "source_video": video_path.name,
+                    "source_segment_start_frame": result["source_segment_start_frame"],
+                    "source_segment_end_frame": result["source_segment_end_frame"],
+                },
+            )
 
     summary = {
         "ts": timestamp(),
@@ -561,6 +819,7 @@ def main() -> int:
         "detector_device": resolve_detector_device(args.detector_backend, args.detector_device),
         "resize_device": effective_resize_device,
         "total_videos": len(videos),
+        "total_segments": total_segments,
         **counters,
     }
     with open(summary_path, "w") as f:
