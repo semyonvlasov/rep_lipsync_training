@@ -92,7 +92,7 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help server-setup remote-sync-code remote-server-setup remote-rclone-config remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -100,6 +100,7 @@ help:
 	@echo "  make remote-sync-code # upload repo training code + official SyncNet assets to a remote box"
 	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box"
 	@echo "  make remote-rclone-config # upload local rclone.conf so the remote can access Drive"
+	@echo "  make remote-prewarm-sfd # instantiate the SFD detector once so the checkpoint is cached on the remote"
 	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
 	@echo "  make remote-observe-system # start the remote system observer"
 	@echo "  make remote-bootstrap # sync code, install deps, and start the remote observer"
@@ -201,6 +202,15 @@ remote-rclone-config:
 	"
 	@echo "remote-rclone-config complete: $(REMOTE):$(REMOTE_RCLONE_CONFIG)"
 
+remote-prewarm-sfd:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		cd '$(REMOTE_ROOT)/training'; \
+		PYTHONPATH='$(REMOTE_ROOT)/models/official_syncnet:$(REMOTE_ROOT)/training:$(REMOTE_ROOT)' \
+			$(REMOTE_PYTHON) -c \"from face_detection import FaceAlignment, LandmarksType; FaceAlignment(LandmarksType._2D, device='cpu', flip_input=False, face_detector='sfd'); print('SFD checkpoint cached')\"; \
+	"
+	@echo "remote-prewarm-sfd complete: $(REMOTE):$(REMOTE_ROOT)"
+
 remote-fetch-official-syncnet:
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
 		set -euo pipefail; \
@@ -239,7 +249,7 @@ remote-observe-system:
 remote-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remote-fetch-official-syncnet remote-observe-system
 	@echo "remote-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
 
-remote-faceclip-bootstrap: remote-sync-code remote-server-setup remote-rclone-config
+remote-faceclip-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd
 	-@$(MAKE) remote-observe-system REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" SYSTEM_WATCH_INTERVAL="$(SYSTEM_WATCH_INTERVAL)"
 	@echo "remote-faceclip-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
 
