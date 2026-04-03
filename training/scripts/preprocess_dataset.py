@@ -145,10 +145,16 @@ class SFDFaceDetector(BaseFaceDetector):
                 if len(d) == 0:
                     results.append((None, "no_face", None))
                     continue
-                d = np.asarray(d[0], dtype=np.float32)
-                d = np.clip(d, 0, None)
-                x1, y1, x2, y2 = map(int, d[:-1])
-                score = float(d[-1])
+                all_faces = np.asarray(d, dtype=np.float32)
+                all_faces = np.clip(all_faces, 0, None)
+                order = np.argsort(-all_faces[:, -1])
+                all_faces = all_faces[order]
+                top_face = all_faces[0]
+                score = float(top_face[-1])
+                if len(all_faces) > 1:
+                    results.append((None, "multi_face", score))
+                    continue
+                x1, y1, x2, y2 = map(int, top_face[:-1])
                 results.append(((x1, y1, x2, y2), "ok", score))
             return results
         except RuntimeError as exc:
@@ -568,6 +574,24 @@ def build_face_track(
         clipped_track[i] = (y1, y2, x1, x2)
         edge_ratios.append(bbox_edge_margin_ratio(clipped_track[i], frames[frame_indices[i]].shape))
 
+    multi_face_frame_indices = {
+        int(record["frame_idx"])
+        for record in detections
+        if str(record.get("reason", "")) == "multi_face"
+    }
+    trim_frame_index_set = set(frame_indices.tolist())
+    dropped_multi_face_frames = int(
+        len(multi_face_frame_indices.intersection(trim_frame_index_set))
+    )
+    if multi_face_frame_indices:
+        keep_mask = np.array(
+            [int(fi) not in multi_face_frame_indices for fi in frame_indices],
+            dtype=bool,
+        )
+        frame_indices = frame_indices[keep_mask]
+        clipped_track = clipped_track[keep_mask]
+        edge_ratios = [ratio for ratio, keep in zip(edge_ratios, keep_mask.tolist()) if keep]
+
     centers = []
     sizes = []
     for record in span_records:
@@ -622,6 +646,7 @@ def build_face_track(
         "min_edge_margin_ratio": float(min(edge_ratios) if edge_ratios else 0.0),
         "max_center_jump_ratio": float(max_center_jump),
         "max_size_jump_ratio": float(max_size_jump),
+        "multi_face_frames_dropped": int(dropped_multi_face_frames),
     }
 
     return {
