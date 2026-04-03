@@ -8,6 +8,7 @@ REMOTE ?= root@ssh9.vast.ai
 PORT ?= 22
 REMOTE_ROOT ?= /root/lipsync_test/rep_lipsync_training
 REMOTE_PYTHON ?= python3
+REMOTE_NAME ?= remote
 REMOTE_GIT_URL ?=
 REMOTE_GIT_BRANCH ?= main
 OFFICIAL_SYNCNET_CKPT ?=
@@ -33,7 +34,7 @@ FACECLIP_MONITOR_DIR ?= $(TRAINING_ROOT)/output/faceclip_remote_monitor
 FACECLIP_MONITOR_REGISTRY ?= $(FACECLIP_MONITOR_DIR)/targets.json
 FACECLIP_MONITOR_CACHE ?= $(FACECLIP_MONITOR_DIR)/status_cache.json
 FACECLIP_MONITOR_OUTPUT ?= $(FACECLIP_MONITOR_DIR)/combined_status.log
-FACECLIP_MONITOR_NAME ?= remote
+FACECLIP_MONITOR_NAME ?= $(REMOTE_NAME)
 FACECLIP_MONITOR_TIMEOUT ?= 8
 FACECLIP_REMOTE_ARCHIVE_MANIFEST ?= training/output/raw_faceclips_x288_cycle/archive_manifest.jsonl
 FACECLIP_REMOTE_CYCLE_LOG ?= training/output/raw_faceclips_x288_cycle/cycle.log
@@ -135,8 +136,9 @@ help:
 	@echo "  REMOTE=root@ssh9.vast.ai"
 	@echo "  PORT=24380"
 	@echo "  REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training"
+	@echo "  REMOTE_NAME=remote_1_3090"
 	@echo "  REMOTE_GIT_BRANCH=main"
-	@echo "  FACECLIP_MONITOR_NAME=remote-3090"
+	@echo "  FACECLIP_MONITOR_NAME=remote-3090 # optional override if different from REMOTE_NAME"
 	@echo "  OFFICIAL_SYNCNET_CKPT=/abs/path/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_URL=https://drive.google.com/open?id=..."
 	@echo "  OFFICIAL_SYNCNET_SKIP_UPLOAD=1"
