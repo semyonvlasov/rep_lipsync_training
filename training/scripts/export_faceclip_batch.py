@@ -310,10 +310,19 @@ def extract_audio_wav_detailed(
 
 def normalize_if_needed(input_video: Path, normalized_path: Path, args) -> tuple[bool, str]:
     if args.input_is_normalized:
-        if input_video != normalized_path:
-            normalized_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(input_video, normalized_path)
-        return True, "already_normalized"
+        try:
+            source_fps, _ = probe_video(input_video, float(args.fps))
+        except Exception as exc:
+            return False, f"normalize_probe_fail ({type(exc).__name__}: {exc})"
+
+        # HDTF "already normalized" clips should be CFR 25fps. If a batch
+        # contains a stray clip at another frame rate, re-normalize it instead
+        # of blindly copying and skewing downstream timing.
+        if abs(float(source_fps) - float(args.fps)) <= 0.01:
+            if input_video != normalized_path:
+                normalized_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(input_video, normalized_path)
+            return True, f"already_normalized fps={source_fps:.3f}"
 
     ok, detail, encoder = normalize_video_clip(
         str(input_video),
@@ -327,6 +336,8 @@ def normalize_if_needed(input_video: Path, normalized_path: Path, args) -> tuple
     )
     if not ok:
         return False, f"normalize_fail encoder={encoder} detail={detail}"
+    if args.input_is_normalized:
+        return True, f"renormalized_from_fps={source_fps:.3f} encoder={encoder} detail={detail}"
     return True, f"normalized encoder={encoder} detail={detail}"
 
 
@@ -692,7 +703,7 @@ def main() -> int:
     parser.add_argument("--input-is-normalized", action="store_true", help="Treat input videos as already normalized 25fps/16k clips")
     parser.add_argument("--size", type=int, default=256)
     parser.add_argument("--fps", type=int, default=25)
-    parser.add_argument("--max-frames", type=int, default=750, help="Maximum source frames per exported segment")
+    parser.add_argument("--max-frames", type=int, default=250, help="Maximum source frames per exported segment")
     parser.add_argument("--detect-every", type=int, default=10)
     parser.add_argument("--smooth-window", type=int, default=9)
     parser.add_argument("--smoothing-style", choices=["legacy_centered", "official_inference", "none"], default="official_inference")
@@ -701,14 +712,14 @@ def main() -> int:
     parser.add_argument("--detector-backend", choices=["opencv", "sfd"], default="sfd")
     parser.add_argument("--detector-device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     parser.add_argument("--detector-batch-size", type=int, default=4)
-    parser.add_argument("--min-detector-score", type=float, default=0.0)
+    parser.add_argument("--min-detector-score", type=float, default=0.99999)
     parser.add_argument("--resize-device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     parser.add_argument("--ffmpeg-bin", default=None)
-    parser.add_argument("--ffmpeg-threads", type=int, default=1)
+    parser.add_argument("--ffmpeg-threads", type=int, default=4)
     parser.add_argument("--ffmpeg-timeout", type=int, default=180)
     parser.add_argument("--video-encoder", choices=VIDEO_ENCODER_CHOICES, default="auto")
     parser.add_argument("--normalized-video-bitrate", default="")
-    parser.add_argument("--video-bitrate", default="2200k")
+    parser.add_argument("--video-bitrate", default="600k")
     args = parser.parse_args()
 
     args.ffmpeg_bin = resolve_ffmpeg_bin(args.ffmpeg_bin)
