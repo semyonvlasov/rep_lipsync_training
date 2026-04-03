@@ -180,11 +180,12 @@ def extract_tar(tar_path: Path, extract_dir: Path) -> None:
 
 def iter_faceclip_samples(extract_root: Path):
     for json_path in sorted(extract_root.rglob("*.json")):
-        if json_path.name == "summary.json":
+        if json_path.name == "summary.json" or json_path.name.endswith(".detections.json"):
             continue
         mp4_path = json_path.with_suffix(".mp4")
         if not mp4_path.exists():
             continue
+        detections_path = json_path.with_name(json_path.stem + ".detections.json")
         meta = load_json(json_path)
         name = str(meta.get("name") or json_path.stem)
         tier = str(meta.get("quality_tier") or json_path.parent.name or "unclassified")
@@ -198,6 +199,7 @@ def iter_faceclip_samples(extract_root: Path):
             "meta": meta,
             "mp4_path": mp4_path,
             "json_path": json_path,
+            "detections_path": detections_path if detections_path.exists() else None,
         }
 
 
@@ -234,6 +236,8 @@ def build_existing_name_index(dataset_root: Path, import_subdir: str) -> dict[st
 
     if import_root.exists():
         for json_path in sorted(import_root.rglob("*.json")):
+            if json_path.name == "summary.json" or json_path.name.endswith(".detections.json"):
+                continue
             meta = load_json(json_path)
             if meta.get("bad_sample", False):
                 stats["bad_lazy"] += 1
@@ -384,6 +388,7 @@ def main() -> int:
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest_mp4 = dest_dir / f"{sample['name']}.mp4"
                 dest_json = dest_dir / f"{sample['name']}.json"
+                dest_detections = dest_dir / f"{sample['name']}.detections.json"
                 if dest_mp4.exists() or dest_json.exists():
                     counts["skipped_duplicate"] += 1
                     existing_names.add(sample["name"])
@@ -391,6 +396,8 @@ def main() -> int:
 
                 shutil.move(str(sample["mp4_path"]), str(dest_mp4))
                 shutil.move(str(sample["json_path"]), str(dest_json))
+                if sample["detections_path"] is not None and sample["detections_path"].exists():
+                    shutil.move(str(sample["detections_path"]), str(dest_detections))
                 existing_names.add(sample["name"])
                 counts["imported"] += 1
 

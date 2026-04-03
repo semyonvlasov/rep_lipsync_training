@@ -110,6 +110,7 @@ class LipSyncDataset(Dataset):
         ffmpeg_bin="ffmpeg",
         materialize_timeout=600,
         materialize_frames_size=None,
+        materialize_min_face_height_ratio=0.95,
         sync_alignment_enabled=True,
         sync_alignment_compute_if_missing=True,
         sync_alignment_guard_mel_ticks=DEFAULT_SYNC_ALIGNMENT_GUARD_MEL_TICKS,
@@ -142,6 +143,10 @@ class LipSyncDataset(Dataset):
         self.materialize_timeout = max(int(materialize_timeout), 30)
         self.materialize_frames_size = self._normalize_materialize_frames_size(
             materialize_frames_size
+        )
+        self.materialize_min_face_height_ratio = min(
+            1.0,
+            max(0.0, float(materialize_min_face_height_ratio)),
         )
         self.audio_cfg = dict(audio_cfg or {})
         self._audio_proc = AudioProcessor(self.audio_cfg) if self.audio_cfg else None
@@ -244,6 +249,7 @@ class LipSyncDataset(Dataset):
                 "  "
                 f"{stats['root']}: processed={stats['processed']} lazy={stats['lazy']} "
                 f"skipped_bad={stats['skipped_bad']} skipped_allowlist={stats['skipped_allowlist']} "
+                f"skipped_materialize_size={stats['skipped_materialize_size']} "
                 f"duplicates_skipped={stats['duplicates_skipped']} duplicates_replaced={stats['duplicates_replaced']}"
             )
 
@@ -296,6 +302,73 @@ class LipSyncDataset(Dataset):
             return f"frames_s{width}.npy"
         return f"frames_{width}x{height}.npy"
 
+    def _required_materialize_face_height(self):
+        if self.materialize_frames_size is not None:
+            return int(self.materialize_frames_size[1])
+        return int(self.img_size)
+
+    @staticmethod
+    def _detection_face_height(record):
+        raw_bbox = record.get("raw_bbox")
+        if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) >= 4:
+            return max(int(raw_bbox[3]) - int(raw_bbox[1]), 0)
+        bbox = record.get("bbox")
+        if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+            return max(int(bbox[1]) - int(bbox[0]), 0)
+        return 0
+
+    def _lazy_entry_materialize_height_stats(self, entry, meta):
+        cached = entry.get("_materialize_height_stats")
+        if cached is not None:
+            return cached
+
+        detections_path = entry.get("detections_path")
+        if not detections_path or not os.path.exists(detections_path):
+            return None
+
+        trimmed_indices = meta.get("trimmed_frame_indices")
+        if not isinstance(trimmed_indices, list) or not trimmed_indices:
+            return None
+
+        detections_payload = _load_json(detections_path)
+        detections = detections_payload.get("detections")
+        if not isinstance(detections, list) or not detections:
+            return None
+
+        height_by_frame = {}
+        for record in detections:
+            try:
+                frame_idx = int(record.get("frame_idx", -1))
+            except Exception:
+                continue
+            if frame_idx < 0:
+                continue
+            height_by_frame[frame_idx] = self._detection_face_height(record)
+
+        total = len(trimmed_indices)
+        if total <= 0:
+            return None
+
+        required_height = self._required_materialize_face_height()
+        valid = 0
+        for frame_idx in trimmed_indices:
+            try:
+                lookup_idx = int(frame_idx)
+            except Exception:
+                continue
+            if int(height_by_frame.get(lookup_idx, 0)) >= required_height:
+                valid += 1
+        ratio = float(valid) / float(total)
+        stats = {
+            "required_height": int(required_height),
+            "valid_frames": int(valid),
+            "total_frames": int(total),
+            "valid_ratio": float(ratio),
+            "passes": bool(ratio >= self.materialize_min_face_height_ratio),
+        }
+        entry["_materialize_height_stats"] = stats
+        return stats
+
     @staticmethod
     def _resize_and_center_crop(frame, target_width, target_height, cv2_mod):
         src_height, src_width = frame.shape[:2]
@@ -323,6 +396,7 @@ class LipSyncDataset(Dataset):
             "lazy": 0,
             "skipped_bad": 0,
             "skipped_allowlist": 0,
+            "skipped_materialize_size": 0,
             "duplicates_skipped": 0,
             "duplicates_replaced": 0,
         }
@@ -382,7 +456,7 @@ class LipSyncDataset(Dataset):
                     stats["skipped_bad"] += 1
                     continue
 
-                cache_dir = self._lazy_cache_dir(root, mp4_path, name)
+                detections_path = os.path.splitext(mp4_path)[0] + ".detections.json"
                 entry = {
                     "key": mp4_path,
                     "type": "lazy",
@@ -390,11 +464,18 @@ class LipSyncDataset(Dataset):
                     "root": root,
                     "video_path": mp4_path,
                     "meta_path": json_path,
+                    "detections_path": detections_path if os.path.exists(detections_path) else None,
                     "meta": meta,
-                    "cache_dir": cache_dir,
-                    "frames_path": os.path.join(cache_dir, self._frames_cache_name()),
-                    "mel_path": os.path.join(cache_dir, self._mel_cache_name),
                 }
+                height_stats = self._lazy_entry_materialize_height_stats(entry, meta)
+                if height_stats is not None and not height_stats["passes"]:
+                    stats["skipped_materialize_size"] += 1
+                    continue
+
+                cache_dir = self._lazy_cache_dir(root, mp4_path, name)
+                entry["cache_dir"] = cache_dir
+                entry["frames_path"] = os.path.join(cache_dir, self._frames_cache_name())
+                entry["mel_path"] = os.path.join(cache_dir, self._mel_cache_name)
                 entries.append(entry)
                 stats["lazy"] += 1
 
