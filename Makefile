@@ -88,7 +88,7 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help server-setup remote-sync-code remote-server-setup remote-fetch-official-syncnet remote-observe-system remote-bootstrap dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help server-setup remote-sync-code remote-server-setup remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -98,6 +98,7 @@ help:
 	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
 	@echo "  make remote-observe-system # start the remote system observer"
 	@echo "  make remote-bootstrap # sync code, install deps, and start the remote observer"
+	@echo "  make remote-faceclip-bootstrap # prepare a remote box for raw->lazy faceclip processing (SFD + ffmpeg + rclone)"
 	@echo "  make dataset         # fetch new processed faceclip archives and merge them into lazy dataset roots"
 	@echo "  make remote-dataset  # run make dataset on the configured remote box"
 	@echo "  make smoke-lazy      # run the lazy dataset smoke workflow"
@@ -204,6 +205,9 @@ remote-observe-system:
 
 remote-bootstrap: remote-sync-code remote-server-setup remote-fetch-official-syncnet remote-observe-system
 	@echo "remote-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-faceclip-bootstrap: remote-sync-code remote-server-setup remote-observe-system
+	@echo "remote-faceclip-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
 
 dataset:
 	@set -euo pipefail; \

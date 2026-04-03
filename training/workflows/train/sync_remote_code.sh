@@ -65,6 +65,11 @@ rsync -a --whole-file --partial --progress -e "$RSYNC_RSH" \
   "$REPO_ROOT/models/official_syncnet/models/" \
   "$REMOTE:$REMOTE_ROOT/models/official_syncnet/models/"
 
+echo "[sync] Uploading official SyncNet face_detection package for SFD..."
+rsync -a --whole-file --partial --progress -e "$RSYNC_RSH" \
+  "$REPO_ROOT/models/official_syncnet/face_detection/" \
+  "$REMOTE:$REMOTE_ROOT/models/official_syncnet/face_detection/"
+
 if [ "$OFFICIAL_SYNCNET_SKIP_UPLOAD" = "1" ]; then
   echo "[sync] Skipping local official SyncNet checkpoint upload; expecting remote fetch path."
 else
