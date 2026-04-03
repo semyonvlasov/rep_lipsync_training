@@ -418,12 +418,24 @@ def resize_face_crops(frames, bboxes, img_size, resize_device="cpu", batch_size=
         return np.array(crops, dtype=np.uint8)
 
 
-def choose_detection_span(valid_records, max_gap_frames):
+def choose_detection_span(valid_records, max_gap_frames, hard_break_indices=None):
     if not valid_records:
         return []
+    hard_break_indices = sorted(int(v) for v in (hard_break_indices or []))
     spans = [[valid_records[0]]]
+    break_pos = 0
     for record in valid_records[1:]:
-        if record["frame_idx"] - spans[-1][-1]["frame_idx"] > max_gap_frames:
+        prev_frame_idx = int(spans[-1][-1]["frame_idx"])
+        while break_pos < len(hard_break_indices) and hard_break_indices[break_pos] <= prev_frame_idx:
+            break_pos += 1
+        crossed_hard_break = (
+            break_pos < len(hard_break_indices)
+            and prev_frame_idx < hard_break_indices[break_pos] < int(record["frame_idx"])
+        )
+        if (
+            int(record["frame_idx"]) - prev_frame_idx > max_gap_frames
+            or crossed_hard_break
+        ):
             spans.append([record])
         else:
             spans[-1].append(record)
@@ -511,8 +523,17 @@ def build_face_track(
             "detections": detections,
         }
 
+    hard_break_indices = {
+        int(record["frame_idx"])
+        for record in detections
+        if str(record.get("reason", "")) == "multi_face"
+    }
     max_gap_frames = max(detect_every * 3, 1)
-    span_records = choose_detection_span(valid_records, max_gap_frames=max_gap_frames)
+    span_records = choose_detection_span(
+        valid_records,
+        max_gap_frames=max_gap_frames,
+        hard_break_indices=hard_break_indices,
+    )
     span_frame_indices = {int(record["frame_idx"]) for record in span_records}
     for record in detections:
         record["in_selected_span"] = int(record["frame_idx"]) in span_frame_indices
@@ -525,6 +546,12 @@ def build_face_track(
 
     raw_trim_start = max(0, span_start - max(span_pad_frames, 0))
     raw_trim_end = min(len(frames) - 1, span_end + max(span_pad_frames - 1, 0))
+    prev_hard_break = max((fi for fi in hard_break_indices if fi < span_start), default=None)
+    next_hard_break = min((fi for fi in hard_break_indices if fi > span_end), default=None)
+    if prev_hard_break is not None:
+        raw_trim_start = max(raw_trim_start, int(prev_hard_break) + 1)
+    if next_hard_break is not None:
+        raw_trim_end = min(raw_trim_end, int(next_hard_break) - 1)
     raw_kept_frames = raw_trim_end - raw_trim_start + 1
     extra_boundary_trim = 0
     if raw_kept_frames >= boundary_trim_min_kept_frames:
@@ -574,23 +601,9 @@ def build_face_track(
         clipped_track[i] = (y1, y2, x1, x2)
         edge_ratios.append(bbox_edge_margin_ratio(clipped_track[i], frames[frame_indices[i]].shape))
 
-    multi_face_frame_indices = {
-        int(record["frame_idx"])
-        for record in detections
-        if str(record.get("reason", "")) == "multi_face"
-    }
-    trim_frame_index_set = set(frame_indices.tolist())
     dropped_multi_face_frames = int(
-        len(multi_face_frame_indices.intersection(trim_frame_index_set))
+        sum(1 for fi in hard_break_indices if trim_start <= int(fi) <= trim_end)
     )
-    if multi_face_frame_indices:
-        keep_mask = np.array(
-            [int(fi) not in multi_face_frame_indices for fi in frame_indices],
-            dtype=bool,
-        )
-        frame_indices = frame_indices[keep_mask]
-        clipped_track = clipped_track[keep_mask]
-        edge_ratios = [ratio for ratio, keep in zip(edge_ratios, keep_mask.tolist()) if keep]
 
     centers = []
     sizes = []
