@@ -213,16 +213,26 @@ remote-observe-system:
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
 		set -euo pipefail; \
 		mkdir -p \"$(REMOTE_ROOT)/training/output/system_observe\"; \
-		pids=\$$(pgrep -f \"[s]cripts/system_watch.py\" || true); \
-		if [ -n \"\$$pids\" ]; then \
-			echo \"\$$pids\" | xargs -r kill 2>/dev/null || true; \
+		existing_pids=\$$(pgrep -f \"^$(REMOTE_PYTHON) -u scripts/system_watch.py --interval \" || true); \
+		if [ -n \"\$$existing_pids\" ]; then \
+			echo \"\$$existing_pids\" | xargs -r kill 2>/dev/null || true; \
 			sleep 1; \
+		fi; \
+		if [ -f \"$(REMOTE_ROOT)/training/output/system_observe/system_watch.pid\" ]; then \
+			old_pid=\$$(cat \"$(REMOTE_ROOT)/training/output/system_observe/system_watch.pid\" 2>/dev/null || true); \
+			if [ -n \"\$$old_pid\" ] && ps -p \"\$$old_pid\" >/dev/null 2>&1; then \
+				kill \"\$$old_pid\" 2>/dev/null || true; \
+				sleep 1; \
+			fi; \
 		fi; \
 		: > \"$(REMOTE_ROOT)/training/output/system_observe/system_watch.log\"; \
 		cd \"$(REMOTE_ROOT)/training\"; \
 		nohup $(REMOTE_PYTHON) -u scripts/system_watch.py --interval \"$(SYSTEM_WATCH_INTERVAL)\" \
 			< /dev/null > \"$(REMOTE_ROOT)/training/output/system_observe/system_watch.log\" 2>&1 & \
-		echo \$$! > \"$(REMOTE_ROOT)/training/output/system_observe/system_watch.pid\"; \
+		pid=\$$!; \
+		echo \"\$$pid\" > \"$(REMOTE_ROOT)/training/output/system_observe/system_watch.pid\"; \
+		sleep 1; \
+		ps -p \"\$$pid\" >/dev/null \
 	'"
 	@echo "remote-observe-system complete: $(REMOTE):$(REMOTE_ROOT)"
 
