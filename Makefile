@@ -27,6 +27,15 @@ PREWARM_LOG_EVERY ?= 100
 PREWARM_MAX_ITEMS ?=
 SYSTEM_WATCH_DIR ?= $(TRAINING_ROOT)/output/system_observe
 SYSTEM_WATCH_INTERVAL ?= 10
+FACECLIP_MONITOR_DIR ?= $(TRAINING_ROOT)/output/faceclip_remote_monitor
+FACECLIP_MONITOR_REGISTRY ?= $(FACECLIP_MONITOR_DIR)/targets.json
+FACECLIP_MONITOR_CACHE ?= $(FACECLIP_MONITOR_DIR)/status_cache.json
+FACECLIP_MONITOR_OUTPUT ?= $(FACECLIP_MONITOR_DIR)/combined_status.log
+FACECLIP_MONITOR_NAME ?= remote
+FACECLIP_MONITOR_TIMEOUT ?= 8
+FACECLIP_REMOTE_ARCHIVE_MANIFEST ?= training/output/raw_faceclips_x288_cycle/archive_manifest.jsonl
+FACECLIP_REMOTE_CYCLE_LOG ?= training/output/raw_faceclips_x288_cycle/cycle.log
+FACECLIP_REMOTE_CYCLE_PID ?= training/output/raw_faceclips_x288_cycle/cycle.pid
 DATASET_REMOTE ?= gdrive:
 DATASET_FOLDER_ID ?= 1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n
 DATASET_ARCHIVE_GLOB ?= *faceclips*.tar
@@ -92,7 +101,7 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -105,6 +114,8 @@ help:
 	@echo "  make remote-observe-system # start the remote system observer"
 	@echo "  make remote-bootstrap # sync code, install deps, and start the remote observer"
 	@echo "  make remote-faceclip-bootstrap # prepare a remote box for raw->lazy faceclip processing (SFD + ffmpeg + rclone)"
+	@echo "  make remote-faceclip-start # launch raw->lazy faceclip processing on a remote and auto-register it in the local monitor"
+	@echo "  make faceclip-monitor-refresh # refresh the combined one-line-per-remote faceclip status snapshot"
 	@echo "  make dataset         # fetch new processed faceclip archives and merge them into lazy dataset roots"
 	@echo "  make remote-dataset  # run make dataset on the configured remote box"
 	@echo "  make smoke-lazy      # run the lazy dataset smoke workflow"
@@ -122,6 +133,7 @@ help:
 	@echo "  REMOTE=root@ssh9.vast.ai"
 	@echo "  PORT=24380"
 	@echo "  REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training"
+	@echo "  FACECLIP_MONITOR_NAME=remote-3090"
 	@echo "  OFFICIAL_SYNCNET_CKPT=/abs/path/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_URL=https://drive.google.com/open?id=..."
 	@echo "  OFFICIAL_SYNCNET_SKIP_UPLOAD=1"
@@ -252,6 +264,54 @@ remote-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remo
 remote-faceclip-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd
 	-@$(MAKE) remote-observe-system REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" SYSTEM_WATCH_INTERVAL="$(SYSTEM_WATCH_INTERVAL)"
 	@echo "remote-faceclip-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-faceclip-register:
+	@mkdir -p "$(FACECLIP_MONITOR_DIR)"
+	@cd "$(REPO_ROOT)" && $(PYTHON) training/scripts/monitor_faceclip_remotes.py register \
+		--registry "$(FACECLIP_MONITOR_REGISTRY)" \
+		--name "$(FACECLIP_MONITOR_NAME)" \
+		--remote "$(REMOTE)" \
+		--port "$(PORT)" \
+		--remote-root "$(REMOTE_ROOT)" \
+		--remote-python "$(REMOTE_PYTHON)" \
+		--manifest-rel "$(FACECLIP_REMOTE_ARCHIVE_MANIFEST)" \
+		--cycle-log-rel "$(FACECLIP_REMOTE_CYCLE_LOG)" \
+		--cycle-pid-rel "$(FACECLIP_REMOTE_CYCLE_PID)"
+
+remote-faceclip-unregister:
+	@cd "$(REPO_ROOT)" && $(PYTHON) training/scripts/monitor_faceclip_remotes.py unregister \
+		--registry "$(FACECLIP_MONITOR_REGISTRY)" \
+		--remote "$(REMOTE)" \
+		--port "$(PORT)"
+
+remote-faceclip-start:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
+		set -euo pipefail; \
+		mkdir -p \"$(REMOTE_ROOT)/training/output/raw_faceclips_x288_cycle\"; \
+		existing=\$$(pgrep -af \"[p]rocess_faceclip_archives_local.sh|[p]rocess_raw_archives_to_lazy_faceclips_gdrive.py\" || true); \
+		if [ -n \"\$$existing\" ]; then \
+			echo \"\$$existing\"; \
+			exit 1; \
+		fi; \
+		cd \"$(REMOTE_ROOT)/training\"; \
+		nohup /bin/bash workflows/preprocess/process_faceclip_archives_local.sh < /dev/null > /dev/null 2>&1 & \
+		pid=\$$!; \
+		echo \"\$$pid\" > \"$(REMOTE_ROOT)/$(FACECLIP_REMOTE_CYCLE_PID)\"; \
+		sleep 1; \
+		ps -p \"\$$pid\" >/dev/null; \
+		echo \"started pid=\$$pid\"; \
+	'"
+	@$(MAKE) remote-faceclip-register REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" FACECLIP_MONITOR_NAME="$(FACECLIP_MONITOR_NAME)"
+	@echo "remote-faceclip-start complete: $(REMOTE):$(PORT)"
+
+faceclip-monitor-refresh:
+	@mkdir -p "$(FACECLIP_MONITOR_DIR)"
+	@cd "$(REPO_ROOT)" && $(PYTHON) training/scripts/monitor_faceclip_remotes.py refresh \
+		--registry "$(FACECLIP_MONITOR_REGISTRY)" \
+		--cache "$(FACECLIP_MONITOR_CACHE)" \
+		--output "$(FACECLIP_MONITOR_OUTPUT)" \
+		--ssh-timeout "$(FACECLIP_MONITOR_TIMEOUT)" \
+		--print-output
 
 dataset:
 	@set -euo pipefail; \

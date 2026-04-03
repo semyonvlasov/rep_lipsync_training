@@ -150,7 +150,21 @@ def select_video_encoder(requested, ffmpeg_bin):
 
 def build_video_codec_args(video_encoder, video_bitrate):
     if video_encoder == "libx264":
-        return ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+        # Respect the caller-provided bitrate for software H.264 too. The
+        # previous CRF-only path ignored `video_bitrate`, which made
+        # normalized_video_bitrate / video_bitrate settings misleading.
+        return [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-b:v",
+            str(video_bitrate),
+            "-maxrate",
+            str(video_bitrate),
+            "-bufsize",
+            str(video_bitrate),
+        ]
     if video_encoder == "libx265":
         return ["-c:v", "libx265", "-preset", "medium", "-b:v", str(video_bitrate)]
     if video_encoder == "h264_videotoolbox":

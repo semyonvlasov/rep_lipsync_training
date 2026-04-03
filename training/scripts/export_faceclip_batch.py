@@ -690,6 +690,17 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
                 args=args,
             )
         )
+
+    # Keep normalized staging only while the current video is being processed.
+    # Once every segment has reached a final non-failure state, the normalized
+    # mp4 is no longer needed and just burns disk for the rest of the archive.
+    if normalized_path.exists() and all(
+        result["status"] in {"ok", "skip", "discard"} for result in results
+    ):
+        try:
+            normalized_path.unlink()
+        except OSError:
+            pass
     return results
 
 
