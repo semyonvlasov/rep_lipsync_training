@@ -47,6 +47,7 @@ from scripts.transcode_video import (  # noqa: E402
     resolve_ffmpeg_bin,
     select_video_encoder,
 )
+from data.sync_alignment import default_sync_alignment_block  # noqa: E402
 
 
 def timestamp() -> str:
@@ -66,6 +67,27 @@ def append_jsonl(path: Path, payload: dict) -> None:
 def load_json(path: Path):
     if not path.exists():
         return None
+
+
+def serialize_detection_records(detections):
+    serialized = []
+    for record in detections or []:
+        raw_bbox = record.get("raw_bbox")
+        bbox = record.get("bbox")
+        serialized.append(
+            {
+                "frame_idx": int(record.get("frame_idx", -1)),
+                "raw_bbox": None if raw_bbox is None else [int(v) for v in raw_bbox],
+                "bbox": None if bbox is None else [int(v) for v in bbox],
+                "reason": str(record.get("reason", "")),
+                "score": None if record.get("score") is None else float(record.get("score")),
+                "passed_score_gate": bool(record.get("passed_score_gate", False)),
+                "edge_margin_ratio": float(record.get("edge_margin_ratio", 0.0)),
+                "passed_edge_gate": bool(record.get("passed_edge_gate", False)),
+                "in_selected_span": bool(record.get("in_selected_span", False)),
+            }
+        )
+    return serialized
     try:
         with open(path) as f:
             return json.load(f)
@@ -261,9 +283,13 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
             frames,
             detect_every=args.detect_every,
             smooth_window=args.smooth_window,
+            smoothing_style=args.smoothing_style,
+            framing_style=args.framing_style,
+            inference_pads=tuple(args.inference_pads),
             detector_backend=args.detector_backend,
             detector_device=args.detector_device,
             detector_batch_size=args.detector_batch_size,
+            min_detector_score=args.min_detector_score,
         )
     except Exception as exc:
         return "fail", f"{name}: detector_fail ({type(exc).__name__}: {exc})"
@@ -308,6 +334,7 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
     tmp_wav = sample_tmp_dir / "audio.wav"
     tmp_final = sample_tmp_dir / f"{name}.mp4"
     tmp_meta = sample_tmp_dir / f"{name}.json"
+    tmp_detections = sample_tmp_dir / f"{name}.detections.json"
 
     try:
         write_video_only_mp4(crops_arr, fps=float(args.fps), output_path=tmp_video_only)
@@ -349,6 +376,11 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
             "detector_backend": args.detector_backend,
             "detector_device": resolve_detector_device(args.detector_backend, args.detector_device),
             "detector_batch_size": int(args.detector_batch_size),
+            "min_detector_score": float(args.min_detector_score),
+            "framing_style": args.framing_style,
+            "inference_pads": [int(v) for v in args.inference_pads],
+            "smoothing_style": args.smoothing_style,
+            "smooth_window": int(args.smooth_window),
             "resize_device": effective_resize_device,
             "video_encoder": args.video_encoder,
             "normalized_video_bitrate": args.normalized_video_bitrate,
@@ -362,16 +394,39 @@ def export_one(video_path: Path, output_dir: Path, normalized_dir: Path, dataset
             "quality_tier": tier,
             "quality_tier_reasons": tier_reasons,
             "normalize_detail": normalize_detail,
+            "sync_alignment": default_sync_alignment_block(),
         }
         with open(tmp_meta, "w") as f:
             json.dump(meta, f, ensure_ascii=False)
+        with open(tmp_detections, "w") as f:
+            json.dump(
+                {
+                    "name": name,
+                    "source_video": video_path.name,
+                    "detector_backend": args.detector_backend,
+                    "detector_device": resolve_detector_device(args.detector_backend, args.detector_device),
+                    "detector_batch_size": int(args.detector_batch_size),
+                    "min_detector_score": float(args.min_detector_score),
+                    "framing_style": args.framing_style,
+                    "inference_pads": [int(v) for v in args.inference_pads],
+                    "smoothing_style": args.smoothing_style,
+                    "smooth_window": int(args.smooth_window),
+                    "detect_every": int(args.detect_every),
+                    "sampled_frames": int(len(track["detections"])),
+                    "detections": serialize_detection_records(track["detections"]),
+                },
+                f,
+                ensure_ascii=False,
+            )
 
         tier_dir = output_dir / tier
         tier_dir.mkdir(parents=True, exist_ok=True)
         final_mp4 = tier_dir / f"{name}.mp4"
         final_meta = tier_dir / f"{name}.json"
+        final_detections = tier_dir / f"{name}.detections.json"
         os.replace(tmp_final, final_mp4)
         os.replace(tmp_meta, final_meta)
+        os.replace(tmp_detections, final_detections)
     finally:
         shutil.rmtree(sample_tmp_dir, ignore_errors=True)
 
@@ -399,9 +454,13 @@ def main() -> int:
     parser.add_argument("--max-frames", type=int, default=750)
     parser.add_argument("--detect-every", type=int, default=10)
     parser.add_argument("--smooth-window", type=int, default=9)
+    parser.add_argument("--smoothing-style", choices=["legacy_centered", "official_inference", "none"], default="official_inference")
+    parser.add_argument("--framing-style", choices=["legacy_square", "official_inference"], default="official_inference")
+    parser.add_argument("--inference-pads", nargs=4, type=int, default=[0, 10, 0, 0], metavar=("PADY1", "PADY2", "PADX1", "PADX2"))
     parser.add_argument("--detector-backend", choices=["opencv", "sfd"], default="sfd")
     parser.add_argument("--detector-device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     parser.add_argument("--detector-batch-size", type=int, default=4)
+    parser.add_argument("--min-detector-score", type=float, default=0.0)
     parser.add_argument("--resize-device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
     parser.add_argument("--ffmpeg-bin", default=None)
     parser.add_argument("--ffmpeg-threads", type=int, default=1)

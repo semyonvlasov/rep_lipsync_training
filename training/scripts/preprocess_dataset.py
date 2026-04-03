@@ -46,6 +46,7 @@ sys.path.insert(0, REPO_ROOT)
 from data.audio import AudioProcessor
 
 _DETECTOR_LOCAL = threading.local()
+DEFAULT_INFERENCE_PADS = (0, 10, 0, 0)
 
 
 def resolve_detector_device(detector_backend, detector_device):
@@ -136,7 +137,20 @@ class SFDFaceDetector(BaseFaceDetector):
     def _detect_chunk(self, frames):
         batch = np.stack(frames, axis=0)
         try:
-            return self.face_alignment.get_detections_for_batch(batch)
+            detected_faces = self.face_alignment.face_detector.detect_from_batch(
+                batch[..., ::-1].copy()
+            )
+            results = []
+            for d in detected_faces:
+                if len(d) == 0:
+                    results.append((None, "no_face", None))
+                    continue
+                d = np.asarray(d[0], dtype=np.float32)
+                d = np.clip(d, 0, None)
+                x1, y1, x2, y2 = map(int, d[:-1])
+                score = float(d[-1])
+                results.append(((x1, y1, x2, y2), "ok", score))
+            return results
         except RuntimeError as exc:
             if "out of memory" not in str(exc).lower() or len(frames) <= 1:
                 raise
@@ -181,17 +195,17 @@ class SFDFaceDetector(BaseFaceDetector):
             chunk_indices = valid_indices[start : start + self.batch_size]
             detections = self._detect_chunk(chunk_frames)
             for idx, det in zip(chunk_indices, detections):
-                if det is None:
-                    results[idx] = (None, "no_face")
+                bbox_xyxy, reason, score = det
+                if bbox_xyxy is None:
+                    results[idx] = (None, reason, score)
                     continue
-                x1, y1, x2, y2 = [int(v) for v in det]
+                x1, y1, x2, y2 = [int(v) for v in bbox_xyxy]
                 w = max(x2 - x1, 0)
                 h = max(y2 - y1, 0)
                 if max(w, h) < min_size:
-                    results[idx] = (None, "small_face")
+                    results[idx] = (None, "small_face", score)
                     continue
-                bbox = expand_face_bbox((x1, y1, w, h), frames[idx].shape)
-                results[idx] = (bbox, "ok")
+                results[idx] = ((x1, y1, x2, y2), "ok", score)
         return results
 
 
@@ -228,6 +242,27 @@ def expand_face_bbox(face, frame_shape, scale=0.7):
     return (y1, y2, x1, x2)
 
 
+def apply_inference_bbox(face_xyxy, frame_shape, pads=DEFAULT_INFERENCE_PADS):
+    x1, y1, x2, y2 = [int(round(v)) for v in face_xyxy]
+    pady1, pady2, padx1, padx2 = [int(v) for v in pads]
+    y1 = max(0, y1 - pady1)
+    y2 = min(frame_shape[0], y2 + pady2)
+    x1 = max(0, x1 - padx1)
+    x2 = min(frame_shape[1], x2 + padx2)
+    return (y1, y2, x1, x2)
+
+
+def finalize_face_bbox(face_xyxy, frame_shape, framing_style="official_inference", inference_pads=DEFAULT_INFERENCE_PADS):
+    if face_xyxy is None:
+        return None
+    x1, y1, x2, y2 = [int(round(v)) for v in face_xyxy]
+    if framing_style == "legacy_square":
+        return expand_face_bbox((x1, y1, max(x2 - x1, 0), max(y2 - y1, 0)), frame_shape)
+    if framing_style == "official_inference":
+        return apply_inference_bbox((x1, y1, x2, y2), frame_shape, pads=inference_pads)
+    raise ValueError(f"Unsupported framing_style: {framing_style}")
+
+
 def bbox_center_and_size(bbox):
     y1, y2, x1, x2 = bbox
     center = np.array([(x1 + x2) / 2.0, (y1 + y2) / 2.0], dtype=np.float32)
@@ -262,6 +297,20 @@ def smooth_bbox_track(track, window):
     return smoothed
 
 
+def smooth_bbox_track_official(track, window):
+    if window <= 1 or len(track) <= 2:
+        return track.astype(np.float32, copy=False)
+    boxes = track.astype(np.float32, copy=True)
+    T = max(int(window), 1)
+    for i in range(len(boxes)):
+        if i + T > len(boxes):
+            window_boxes = boxes[len(boxes) - T :]
+        else:
+            window_boxes = boxes[i : i + T]
+        boxes[i] = np.mean(window_boxes, axis=0)
+    return boxes
+
+
 def detect_face_on_frame(cascade, frame, min_size=60):
     if frame.mean() < 20:
         return None, "dark_frame"
@@ -270,7 +319,8 @@ def detect_face_on_frame(cascade, frame, min_size=60):
     if len(faces) == 0:
         return None, "no_face"
     face = max(faces, key=lambda f: f[2] * f[3])
-    return expand_face_bbox(face, frame.shape), "ok"
+    x, y, w, h = face
+    return (int(x), int(y), int(x + w), int(y + h)), "ok"
 
 
 def resize_face_crops(frames, bboxes, img_size, resize_device="cpu", batch_size=32):
@@ -385,11 +435,15 @@ def build_face_track(
     detect_every=10,
     min_size=60,
     smooth_window=9,
+    smoothing_style="legacy_centered",
+    framing_style="official_inference",
+    inference_pads=DEFAULT_INFERENCE_PADS,
     detector_backend="opencv",
     detector_device="auto",
     detector_batch_size=4,
     min_valid_detections=3,
     min_detection_coverage=0.45,
+    min_detector_score=0.0,
     min_edge_margin_ratio=0.06,
     max_center_jump_ratio=0.55,
     max_size_jump_ratio=0.40,
@@ -412,16 +466,36 @@ def build_face_track(
 
     detections = []
     valid_records = []
-    for fi, (bbox, reason) in zip(sample_indices, detection_results):
+    for fi, raw_result in zip(sample_indices, detection_results):
+        if isinstance(raw_result, dict):
+            raw_bbox = raw_result.get("bbox")
+            reason = raw_result.get("reason", "unknown")
+            score = raw_result.get("score")
+        elif isinstance(raw_result, (tuple, list)) and len(raw_result) >= 3:
+            raw_bbox, reason, score = raw_result[:3]
+        else:
+            raw_bbox, reason = raw_result
+            score = None
+        bbox = finalize_face_bbox(
+            raw_bbox,
+            frames[fi].shape,
+            framing_style=framing_style,
+            inference_pads=inference_pads,
+        )
         edge_ratio = bbox_edge_margin_ratio(bbox, frames[fi].shape) if bbox is not None else 0.0
         record = {
             "frame_idx": fi,
+            "raw_bbox": None if raw_bbox is None else [int(v) for v in raw_bbox],
             "bbox": bbox,
             "reason": reason,
+            "score": None if score is None else float(score),
             "edge_margin_ratio": edge_ratio,
+            "passed_score_gate": bool(score is None or float(score) >= float(min_detector_score)),
+            "passed_edge_gate": bool(bbox is not None and edge_ratio >= min_edge_margin_ratio),
+            "in_selected_span": False,
         }
         detections.append(record)
-        if bbox is not None and edge_ratio >= min_edge_margin_ratio:
+        if record["passed_edge_gate"] and record["passed_score_gate"]:
             valid_records.append(record)
 
     if len(valid_records) < min_valid_detections:
@@ -433,6 +507,9 @@ def build_face_track(
 
     max_gap_frames = max(detect_every * 3, 1)
     span_records = choose_detection_span(valid_records, max_gap_frames=max_gap_frames)
+    span_frame_indices = {int(record["frame_idx"]) for record in span_records}
+    for record in detections:
+        record["in_selected_span"] = int(record["frame_idx"]) in span_frame_indices
     span_start = span_records[0]["frame_idx"]
     span_end = span_records[-1]["frame_idx"]
     if span_pad_frames is None:
@@ -467,7 +544,14 @@ def build_face_track(
         ],
         axis=1,
     )
-    track = smooth_bbox_track(track, smooth_window)
+    if smoothing_style == "official_inference":
+        track = smooth_bbox_track_official(track, smooth_window)
+    elif smoothing_style == "legacy_centered":
+        track = smooth_bbox_track(track, smooth_window)
+    elif smoothing_style == "none":
+        track = track.astype(np.float32, copy=False)
+    else:
+        raise ValueError(f"Unsupported smoothing_style: {smoothing_style}")
 
     clipped_track = np.zeros_like(track, dtype=np.int32)
     edge_ratios = []
@@ -523,6 +607,11 @@ def build_face_track(
         "sampled_frames": len(sample_indices),
         "valid_detections": len(span_records),
         "detection_coverage": float(coverage),
+        "min_detector_score_threshold": float(min_detector_score),
+        "framing_style": framing_style,
+        "inference_pads": [int(v) for v in inference_pads],
+        "smoothing_style": smoothing_style,
+        "smooth_window": int(smooth_window),
         "raw_trim_start": int(raw_trim_start),
         "raw_trim_end": int(raw_trim_end),
         "trim_start": int(trim_start),
@@ -655,6 +744,9 @@ def process_video(
     max_frames=750,
     detect_every=10,
     smooth_window=9,
+    smoothing_style="official_inference",
+    framing_style="official_inference",
+    inference_pads=DEFAULT_INFERENCE_PADS,
     save_preview=True,
     overwrite=False,
     ffmpeg_bin=None,
@@ -662,6 +754,7 @@ def process_video(
     detector_backend="opencv",
     detector_device="auto",
     detector_batch_size=4,
+    min_detector_score=0.0,
     resize_device="cpu",
 ):
     """Process a single video into face crops + mel."""
@@ -691,9 +784,13 @@ def process_video(
         frames,
         detect_every=detect_every,
         smooth_window=smooth_window,
+        smoothing_style=smoothing_style,
+        framing_style=framing_style,
+        inference_pads=inference_pads,
         detector_backend=detector_backend,
         detector_device=detector_device,
         detector_batch_size=detector_batch_size,
+        min_detector_score=min_detector_score,
     )
     if not track["ok"]:
         return name, track["status"], time.time() - t0
@@ -761,6 +858,11 @@ def process_video(
                 "img_size": img_size,
                 "detector_backend": detector_backend,
                 "detector_device": resolve_detector_device(detector_backend, detector_device),
+                "min_detector_score": float(min_detector_score),
+                "framing_style": framing_style,
+                "inference_pads": [int(v) for v in inference_pads],
+                "smoothing_style": smoothing_style,
+                "smooth_window": int(smooth_window),
                 "resize_device": resolve_resize_device(resize_device),
                 "trim_start_frame": int(trim_start),
                 "trim_end_frame": int(trim_end),
@@ -793,6 +895,26 @@ def main():
     parser.add_argument("--max-videos", type=int, default=0, help="Max videos to process (0=all)")
     parser.add_argument("--detect-every", type=int, default=10, help="Run face detection every N frames")
     parser.add_argument("--smooth-window", type=int, default=9, help="Temporal smoothing window for bbox track")
+    parser.add_argument(
+        "--smoothing-style",
+        choices=["legacy_centered", "official_inference", "none"],
+        default="official_inference",
+        help="Temporal smoothing policy for face track",
+    )
+    parser.add_argument(
+        "--framing-style",
+        choices=["legacy_square", "official_inference"],
+        default="official_inference",
+        help="How detector boxes are converted into final face crops",
+    )
+    parser.add_argument(
+        "--inference-pads",
+        nargs=4,
+        type=int,
+        default=[0, 10, 0, 0],
+        metavar=("PADY1", "PADY2", "PADX1", "PADX2"),
+        help="Official-style pads applied to detector bbox before crop",
+    )
     parser.add_argument("--no-preview", action="store_true", help="Do not save preview contact sheets")
     parser.add_argument("--overwrite", action="store_true", help="Reprocess videos even if frames.npy exists")
     parser.add_argument(
@@ -812,6 +934,12 @@ def main():
         type=int,
         default=4,
         help="Batch size for SFD face detection on sampled frames",
+    )
+    parser.add_argument(
+        "--min-detector-score",
+        type=float,
+        default=0.0,
+        help="Minimum detector confidence to keep a sampled-frame detection (SFD only)",
     )
     parser.add_argument(
         "--ffmpeg-bin",
@@ -873,6 +1001,9 @@ def main():
             args.max_frames,
             detect_every=args.detect_every,
             smooth_window=args.smooth_window,
+            smoothing_style=args.smoothing_style,
+            framing_style=args.framing_style,
+            inference_pads=tuple(args.inference_pads),
             save_preview=not args.no_preview,
             overwrite=args.overwrite,
             ffmpeg_bin=args.ffmpeg_bin,
@@ -880,6 +1011,7 @@ def main():
             detector_backend=args.detector_backend,
             detector_device=args.detector_device,
             detector_batch_size=args.detector_batch_size,
+            min_detector_score=args.min_detector_score,
             resize_device=args.resize_device,
         )
         if status.startswith("ok_bad"):

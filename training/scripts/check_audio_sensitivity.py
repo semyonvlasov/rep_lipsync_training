@@ -109,9 +109,17 @@ def load_generator(checkpoint_path, cfg, device):
 def load_syncnet(checkpoint_path, device, syncnet_T):
     ck = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if isinstance(ck, dict) and "model" in ck:
-        model = LocalSyncNet(T=syncnet_T).to(device)
+        ck_cfg = ck.get("config") or {}
+        ck_sync_cfg = ck_cfg.get("syncnet") or {}
+        ck_kind = ck.get("syncnet_kind") or ck_sync_cfg.get("model_type") or "local"
+        if ck_kind == "mirror":
+            SyncNet = load_official_syncnet()
+            model = SyncNet().to(device)
+            kind = "mirror"
+        else:
+            model = LocalSyncNet(T=syncnet_T).to(device)
+            kind = "local"
         model.load_state_dict(ck["model"])
-        kind = "local"
     else:
         SyncNet = load_official_syncnet()
         model = SyncNet().to(device)
@@ -126,7 +134,7 @@ def load_syncnet(checkpoint_path, device, syncnet_T):
 
 def sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, face_sequences):
     sync_face = prepare_syncnet_visual(face_sequences)
-    if syncnet_kind == "official":
+    if syncnet_kind in {"official", "mirror"}:
         audio_emb, video_emb = syncnet(mel, sync_face)
     else:
         sync_audio = prepare_local_syncnet_audio(indiv_mels)

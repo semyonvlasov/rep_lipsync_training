@@ -26,10 +26,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torchvision.models as tv_models
 
-# Support both cuda and mps
-if torch.cuda.is_available():
-    from torch.cuda.amp import autocast, GradScaler
-
 TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TRAINING_ROOT)
 
@@ -101,6 +97,10 @@ def update_ema(current, value, span):
     return (alpha * value) + ((1.0 - alpha) * current)
 
 
+def cuda_autocast(enabled):
+    return torch.amp.autocast("cuda", enabled=enabled)
+
+
 def format_eta(seconds):
     if seconds is None or seconds < 0:
         return "?"
@@ -161,9 +161,16 @@ def prepare_local_syncnet_audio(indiv_mels):
 def load_syncnet_teacher(checkpoint_path, device, syncnet_T):
     ck = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if isinstance(ck, dict) and "model" in ck:
-        model = LocalSyncNet(T=syncnet_T).to(device)
+        ck_cfg = ck.get("config") or {}
+        ck_sync_cfg = ck_cfg.get("syncnet") or {}
+        ck_kind = ck.get("syncnet_kind") or ck_sync_cfg.get("model_type") or "local"
+        if ck_kind == "mirror":
+            model = LipSyncSyncNet().to(device)
+            kind = "mirror"
+        else:
+            model = LocalSyncNet(T=syncnet_T).to(device)
+            kind = "local"
         model.load_state_dict(ck["model"])
-        kind = "local"
         epoch = ck.get("epoch", "?")
     else:
         model = LipSyncSyncNet().to(device)
@@ -180,7 +187,7 @@ def load_syncnet_teacher(checkpoint_path, device, syncnet_T):
 
 def sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, face_sequences):
     sync_face = prepare_syncnet_visual(face_sequences)
-    if syncnet_kind == "official":
+    if syncnet_kind in {"official", "mirror"}:
         audio_emb, video_emb = syncnet(mel, sync_face)
     else:
         sync_audio = prepare_local_syncnet_audio(indiv_mels)
@@ -256,6 +263,26 @@ def load_allowlist(path):
         return [line.strip() for line in f if line.strip()]
 
 
+def build_sync_alignment_kwargs(cfg):
+    sync_cfg = cfg.get("data", {}).get("sync_alignment", {})
+    return {
+        "sync_alignment_enabled": sync_cfg.get("enabled", True),
+        "sync_alignment_compute_if_missing": sync_cfg.get("compute_if_missing", True),
+        "sync_alignment_guard_mel_ticks": sync_cfg.get("guard_mel_ticks", 10),
+        "sync_alignment_search_mel_ticks": sync_cfg.get("search_mel_ticks", 10),
+        "sync_alignment_samples": sync_cfg.get("samples", 0),
+        "sync_alignment_sample_density_per_5s": sync_cfg.get("sample_density_per_5s", 10.0),
+        "sync_alignment_seed": sync_cfg.get("seed", 20260403),
+        "sync_alignment_min_start_gap_ratio": sync_cfg.get("min_start_gap_ratio", 0.0),
+        "sync_alignment_start_gap_multiple": sync_cfg.get("start_gap_multiple", 0),
+        "sync_alignment_device": sync_cfg.get("device", "auto"),
+        "sync_alignment_batch_size": sync_cfg.get("batch_size", 640),
+        "sync_alignment_outlier_trim_ratio": sync_cfg.get("outlier_trim_ratio", 0.2),
+        "sync_alignment_syncnet_checkpoint": sync_cfg.get("syncnet_checkpoint"),
+        "sync_alignment_write_manifest": sync_cfg.get("write_manifest", True),
+    }
+
+
 def build_generator_dataset(cfg, img_size, roots, speaker_allowlist):
     return LipSyncDataset(
         roots=roots,
@@ -272,6 +299,7 @@ def build_generator_dataset(cfg, img_size, roots, speaker_allowlist):
         ffmpeg_bin=cfg["data"].get("ffmpeg_bin", "ffmpeg"),
         materialize_timeout=cfg["data"].get("materialize_timeout", 600),
         materialize_frames_size=cfg["data"].get("materialize_frames_size", cfg["model"]["img_size"]),
+        **build_sync_alignment_kwargs(cfg),
     )
 
 
@@ -309,7 +337,7 @@ def eval_syncnet_alignment(generator, syncnet, syncnet_kind, loader, device, max
         mel = mel.to(device, non_blocking=non_blocking)
         gt = gt.to(device, non_blocking=non_blocking)
 
-        amp_ctx = autocast(enabled=use_amp) if device == "cuda" else nullcontext()
+        amp_ctx = cuda_autocast(enabled=use_amp) if device == "cuda" else nullcontext()
         with amp_ctx:
             pred = generator(indiv_mels, face_input)
             if isinstance(pred, tuple):
@@ -431,7 +459,7 @@ def main():
 
     use_amp = cfg["training"]["mixed_precision"] and device == "cuda"
     if device == "cuda":
-        scaler = GradScaler(enabled=use_amp)
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     else:
         scaler = None
 
@@ -570,7 +598,7 @@ def main():
             # ---- Generator forward ----
             g_opt.zero_grad(set_to_none=True)
 
-            amp_ctx = autocast(enabled=use_amp) if device == "cuda" else nullcontext()
+            amp_ctx = cuda_autocast(enabled=use_amp) if device == "cuda" else nullcontext()
 
             with amp_ctx:
                 if cfg["model"]["predict_alpha"]:

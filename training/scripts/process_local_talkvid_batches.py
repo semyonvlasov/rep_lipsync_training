@@ -208,6 +208,13 @@ def main() -> int:
         batch_normalized_root = normalized_root / work_name
         processed_tar = archives_root / output_name
         summary_path = batch_export_root / "summary.json"
+        summary = {}
+        exported_samples = count_exported_samples(batch_export_root)
+        can_resume_processed = (
+            final_stage in {"processed", "packaged", "uploaded"}
+            and summary_path.exists()
+            and exported_samples > 0
+        )
 
         append_jsonl(
             manifest_path,
@@ -240,75 +247,82 @@ def main() -> int:
                 break
             continue
 
-        log(f"[TalkVidFaceclip] exporting {batch_name} -> {output_name}")
-        run_logged(
-            [
-                args.python_bin,
-                "scripts/export_faceclip_batch.py",
-                "--input-dir",
-                str(raw_dir),
-                "--output-dir",
-                str(batch_export_root),
-                "--normalized-dir",
-                str(batch_normalized_root),
-                "--source-archive",
-                source_archive,
-                "--dataset-kind",
-                "talkvid",
-                "--size",
-                str(args.size),
-                "--fps",
-                str(args.fps),
-                "--max-frames",
-                str(args.max_frames),
-                "--detect-every",
-                str(args.detect_every),
-                "--smooth-window",
-                str(args.smooth_window),
-                "--detector-backend",
-                args.detector_backend,
-                "--detector-device",
-                args.detector_device,
-                "--detector-batch-size",
-                str(args.detector_batch_size),
-                "--resize-device",
-                args.resize_device,
-                "--ffmpeg-bin",
-                args.ffmpeg_bin or "",
-                "--ffmpeg-threads",
-                str(args.ffmpeg_threads),
-                "--ffmpeg-timeout",
-                str(args.ffmpeg_timeout),
-                "--video-encoder",
-                args.video_encoder,
-                "--normalized-video-bitrate",
-                args.normalized_video_bitrate,
-                "--video-bitrate",
-                args.video_bitrate,
-            ],
-            prefix="[TalkVidFaceclip:export]",
-        )
-
-        summary = {}
-        if summary_path.exists():
+        if can_resume_processed:
             with open(summary_path) as f:
                 summary = json.load(f)
-        exported_samples = count_exported_samples(batch_export_root)
-        append_jsonl(
-            manifest_path,
-            {
-                "ts": timestamp(),
-                "batch_name": batch_name,
-                "source_archive": source_archive,
-                "processed_archive": output_name,
-                "stage": "processed",
-                "batch_root": str(batch_root),
-                "export_root": str(batch_export_root),
-                "normalized_root": str(batch_normalized_root),
-                "summary": summary,
-                "exported_samples": exported_samples,
-            },
-        )
+            log(
+                f"[TalkVidFaceclip] resuming {batch_name} from stage={final_stage} "
+                f"exported_samples={exported_samples}"
+            )
+        else:
+            log(f"[TalkVidFaceclip] exporting {batch_name} -> {output_name}")
+            run_logged(
+                [
+                    args.python_bin,
+                    "scripts/export_faceclip_batch.py",
+                    "--input-dir",
+                    str(raw_dir),
+                    "--output-dir",
+                    str(batch_export_root),
+                    "--normalized-dir",
+                    str(batch_normalized_root),
+                    "--source-archive",
+                    source_archive,
+                    "--dataset-kind",
+                    "talkvid",
+                    "--size",
+                    str(args.size),
+                    "--fps",
+                    str(args.fps),
+                    "--max-frames",
+                    str(args.max_frames),
+                    "--detect-every",
+                    str(args.detect_every),
+                    "--smooth-window",
+                    str(args.smooth_window),
+                    "--detector-backend",
+                    args.detector_backend,
+                    "--detector-device",
+                    args.detector_device,
+                    "--detector-batch-size",
+                    str(args.detector_batch_size),
+                    "--resize-device",
+                    args.resize_device,
+                    "--ffmpeg-bin",
+                    args.ffmpeg_bin or "",
+                    "--ffmpeg-threads",
+                    str(args.ffmpeg_threads),
+                    "--ffmpeg-timeout",
+                    str(args.ffmpeg_timeout),
+                    "--video-encoder",
+                    args.video_encoder,
+                    "--normalized-video-bitrate",
+                    args.normalized_video_bitrate,
+                    "--video-bitrate",
+                    args.video_bitrate,
+                ],
+                prefix="[TalkVidFaceclip:export]",
+            )
+
+            if summary_path.exists():
+                with open(summary_path) as f:
+                    summary = json.load(f)
+            exported_samples = count_exported_samples(batch_export_root)
+            append_jsonl(
+                manifest_path,
+                {
+                    "ts": timestamp(),
+                    "batch_name": batch_name,
+                    "source_archive": source_archive,
+                    "processed_archive": output_name,
+                    "stage": "processed",
+                    "batch_root": str(batch_root),
+                    "export_root": str(batch_export_root),
+                    "normalized_root": str(batch_normalized_root),
+                    "summary": summary,
+                    "exported_samples": exported_samples,
+                },
+            )
 
         if exported_samples == 0:
             log(f"[TalkVidFaceclip] no usable samples in {batch_name}; cleaning local staging")
@@ -328,6 +342,10 @@ def main() -> int:
             if args.max_batches > 0 and processed_batches >= args.max_batches:
                 break
             continue
+
+        if batch_normalized_root.exists():
+            log(f"[TalkVidFaceclip] cleaning normalized staging for {batch_name}")
+            cleanup_paths([batch_normalized_root])
 
         if not processed_tar.exists():
             log(f"[TalkVidFaceclip] packaging {output_name}")

@@ -4,6 +4,13 @@ REPO_ROOT := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 TRAINING_ROOT := $(REPO_ROOT)/training
 PYTHON ?= python3
 PIP ?= $(PYTHON) -m pip
+REMOTE ?= root@ssh9.vast.ai
+PORT ?= 22
+REMOTE_ROOT ?= /root/lipsync_test/rep_lipsync_training
+REMOTE_PYTHON ?= python3
+OFFICIAL_SYNCNET_CKPT ?=
+OFFICIAL_SYNCNET_URL ?= https://drive.google.com/open?id=1_RUm6ncXDX2e_Qoyj24Yrvr6CGaBtPY4
+OFFICIAL_SYNCNET_SKIP_UPLOAD ?= 1
 
 SERVER_PY_REQUIREMENTS := $(TRAINING_ROOT)/requirements-server.txt
 
@@ -16,11 +23,23 @@ PREWARM_LOG_EVERY ?= 100
 PREWARM_MAX_ITEMS ?=
 SYSTEM_WATCH_DIR ?= $(TRAINING_ROOT)/output/system_observe
 SYSTEM_WATCH_INTERVAL ?= 10
+DATASET_REMOTE ?= gdrive:
+DATASET_FOLDER_ID ?= 1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n
+DATASET_ARCHIVE_GLOB ?= *faceclips*.tar
+DATASET_MAX_ARCHIVES ?= 0
+DATASET_MANIFEST_PATH ?= output/faceclip_merge/merge_manifest.jsonl
+DATASET_DOWNLOAD_DIR ?= data/_imports/faceclip_merge_downloads
+DATASET_EXTRACT_DIR ?= data/_imports/faceclip_merge_extracted
+DATASET_HDTF_ROOT ?= data/hdtf/processed
+DATASET_TALKVID_ROOT ?= data/talkvid/processed_medium
+DATASET_IMPORT_SUBDIR ?= _lazy_imports
+DATASET_INCLUDE_TIERS ?=
 SYNCNET_TEACHER ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 OFFICIAL_SYNCNET_PATH ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 SYNCNET_RESUME ?=
 GENERATOR_RESUME ?=
 SPEAKER_LIST ?=
+VAL_SPEAKER_LIST ?=
 SYNCNET_OUTPUT_DIR ?=
 SYNCNET_WATCH_PID ?=
 GENERATOR_TEMPLATE_CONFIG ?= configs/lipsync_cuda3090_hdtf_talkvid.yaml
@@ -69,11 +88,18 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help server-setup smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help server-setup remote-sync-code remote-server-setup remote-fetch-official-syncnet remote-observe-system remote-bootstrap dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
+	@echo "  make remote-sync-code # upload repo training code + official SyncNet assets to a remote box"
+	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box"
+	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
+	@echo "  make remote-observe-system # start the remote system observer"
+	@echo "  make remote-bootstrap # sync code, install deps, and start the remote observer"
+	@echo "  make dataset         # fetch new processed faceclip archives and merge them into lazy dataset roots"
+	@echo "  make remote-dataset  # run make dataset on the configured remote box"
 	@echo "  make smoke-lazy      # run the lazy dataset smoke workflow"
 	@echo "  make train-syncnet   # run scripts/train_syncnet.py with \$$SYNCNET_CONFIG"
 	@echo "  make train-generator # run scripts/train_generator.py with \$$GENERATOR_CONFIG"
@@ -86,6 +112,15 @@ help:
 	@echo ""
 	@echo "Useful overrides:"
 	@echo "  PYTHON=python3"
+	@echo "  REMOTE=root@ssh9.vast.ai"
+	@echo "  PORT=24380"
+	@echo "  REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training"
+	@echo "  OFFICIAL_SYNCNET_CKPT=/abs/path/lipsync_expert.pth"
+	@echo "  OFFICIAL_SYNCNET_URL=https://drive.google.com/open?id=..."
+	@echo "  OFFICIAL_SYNCNET_SKIP_UPLOAD=1"
+	@echo "  DATASET_FOLDER_ID=1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n"
+	@echo "  DATASET_MANIFEST_PATH=output/faceclip_merge/merge_manifest.jsonl"
+	@echo "  DATASET_INCLUDE_TIERS=\"confident medium\""
 	@echo "  SYNCNET_CONFIG=configs/syncnet_cuda3090_medium.yaml"
 	@echo "  GENERATOR_CONFIG=configs/lipsync_cuda3090_hdtf_talkvid.yaml"
 	@echo "  SYNCNET_TEACHER=../../models/wav2lip/checkpoints/lipsync_expert.pth"
@@ -93,6 +128,7 @@ help:
 	@echo "  SYNCNET_RESUME=/abs/or/rel/checkpoint.pth"
 	@echo "  GENERATOR_RESUME=/abs/or/rel/checkpoint.pth"
 	@echo "  SPEAKER_LIST=/abs/or/rel/speakers.txt"
+	@echo "  VAL_SPEAKER_LIST=/abs/or/rel/val_speakers.txt"
 	@echo "  SYNCNET_OUTPUT_DIR=output/<syncnet_run_dir>"
 	@echo "  SYNCNET_WATCH_PID=<running_syncnet_pid>"
 	@echo "  COMPARE_SAMPLES=200"
@@ -118,6 +154,97 @@ server-setup:
 	$(PIP) install --no-cache-dir -r $(SERVER_PY_REQUIREMENTS)
 	@echo "server-setup complete"
 
+remote-sync-code:
+	PORT="$(PORT)" REMOTE="$(REMOTE)" REMOTE_ROOT="$(REMOTE_ROOT)" \
+		OFFICIAL_SYNCNET_CKPT="$(OFFICIAL_SYNCNET_CKPT)" \
+		OFFICIAL_SYNCNET_URL="$(OFFICIAL_SYNCNET_URL)" \
+		OFFICIAL_SYNCNET_SKIP_UPLOAD="$(OFFICIAL_SYNCNET_SKIP_UPLOAD)" \
+		bash "$(TRAINING_ROOT)/workflows/train/sync_remote_code.sh"
+	@echo "remote-sync-code complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-server-setup:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		if ! command -v apt-get >/dev/null 2>&1; then \
+			echo 'remote-server-setup is intended for Ubuntu/Debian training servers with apt-get'; \
+			exit 1; \
+		fi; \
+		apt-get update; \
+		DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg libsndfile1 rsync rclone git make python3-pip; \
+		$(REMOTE_PYTHON) -m pip install --upgrade pip; \
+		$(REMOTE_PYTHON) -m pip install --no-cache-dir -r '$(REMOTE_ROOT)/training/requirements-server.txt'; \
+	"
+	@echo "remote-server-setup complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-fetch-official-syncnet:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		mkdir -p '$(REMOTE_ROOT)/models/official_syncnet/checkpoints'; \
+		$(REMOTE_PYTHON) -m gdown --fuzzy '$(OFFICIAL_SYNCNET_URL)' -O '$(REMOTE_ROOT)/models/official_syncnet/checkpoints/lipsync_expert.pth'; \
+	"
+	@echo "remote-fetch-official-syncnet complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-observe-system:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		mkdir -p '$(REMOTE_ROOT)/training/output/system_observe'; \
+		pids=\$$(pgrep -f '[s]cripts/system_watch.py' || true); \
+		if [ -n \"\$$pids\" ]; then \
+			echo \"\$$pids\" | xargs -r kill 2>/dev/null || true; \
+			sleep 1; \
+		fi; \
+		: > '$(REMOTE_ROOT)/training/output/system_observe/system_watch.log'; \
+		cd '$(REMOTE_ROOT)/training'; \
+		setsid -f $(REMOTE_PYTHON) -u scripts/system_watch.py --interval '$(SYSTEM_WATCH_INTERVAL)' \
+			< /dev/null > '$(REMOTE_ROOT)/training/output/system_observe/system_watch.log' 2>&1; \
+		sleep 1; \
+		pgrep -n -f '[s]cripts/system_watch.py' > '$(REMOTE_ROOT)/training/output/system_observe/system_watch.pid'; \
+	"
+	@echo "remote-observe-system complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-bootstrap: remote-sync-code remote-server-setup remote-fetch-official-syncnet remote-observe-system
+	@echo "remote-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
+
+dataset:
+	@set -euo pipefail; \
+	include_args=""; \
+	for tier in $(DATASET_INCLUDE_TIERS); do \
+		include_args="$$include_args --include-tier $$tier"; \
+	done; \
+	cd $(TRAINING_ROOT); \
+	$(PYTHON) scripts/merge_faceclip_archives_from_gdrive.py \
+		--remote "$(DATASET_REMOTE)" \
+		--folder-id "$(DATASET_FOLDER_ID)" \
+		--archive-glob "$(DATASET_ARCHIVE_GLOB)" \
+		--max-archives $(DATASET_MAX_ARCHIVES) \
+		--manifest-path "$(DATASET_MANIFEST_PATH)" \
+		--download-dir "$(DATASET_DOWNLOAD_DIR)" \
+		--extract-dir "$(DATASET_EXTRACT_DIR)" \
+		--hdtf-root "$(DATASET_HDTF_ROOT)" \
+		--talkvid-root "$(DATASET_TALKVID_ROOT)" \
+		--import-subdir "$(DATASET_IMPORT_SUBDIR)" \
+		$$include_args
+
+remote-dataset:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		cd '$(REMOTE_ROOT)'; \
+		make dataset \
+			PYTHON='$(REMOTE_PYTHON)' \
+			DATASET_REMOTE='$(DATASET_REMOTE)' \
+			DATASET_FOLDER_ID='$(DATASET_FOLDER_ID)' \
+			DATASET_ARCHIVE_GLOB='$(DATASET_ARCHIVE_GLOB)' \
+			DATASET_MAX_ARCHIVES='$(DATASET_MAX_ARCHIVES)' \
+			DATASET_MANIFEST_PATH='$(DATASET_MANIFEST_PATH)' \
+			DATASET_DOWNLOAD_DIR='$(DATASET_DOWNLOAD_DIR)' \
+			DATASET_EXTRACT_DIR='$(DATASET_EXTRACT_DIR)' \
+			DATASET_HDTF_ROOT='$(DATASET_HDTF_ROOT)' \
+			DATASET_TALKVID_ROOT='$(DATASET_TALKVID_ROOT)' \
+			DATASET_IMPORT_SUBDIR='$(DATASET_IMPORT_SUBDIR)' \
+			DATASET_INCLUDE_TIERS='$(DATASET_INCLUDE_TIERS)'; \
+	"
+	@echo "remote-dataset complete: $(REMOTE):$(REMOTE_ROOT)"
+
 smoke-lazy:
 	cd $(TRAINING_ROOT) && bash $(SMOKE_LAZY_WORKFLOW)
 
@@ -125,7 +252,8 @@ train-syncnet:
 	cd $(TRAINING_ROOT) && $(PYTHON) scripts/train_syncnet.py \
 		--config $(SYNCNET_CONFIG) \
 		$(if $(SYNCNET_RESUME),--resume $(SYNCNET_RESUME),) \
-		$(if $(SPEAKER_LIST),--speaker-list $(SPEAKER_LIST),)
+		$(if $(SPEAKER_LIST),--speaker-list $(SPEAKER_LIST),) \
+		$(if $(VAL_SPEAKER_LIST),--val-speaker-list $(VAL_SPEAKER_LIST),)
 
 train-generator:
 	cd $(TRAINING_ROOT) && $(PYTHON) scripts/train_generator.py \
@@ -149,9 +277,14 @@ observe-system:
 		sleep 1; \
 	fi
 	@: > "$(SYSTEM_WATCH_DIR)/system_watch.log"
-	cd $(TRAINING_ROOT) && nohup $(PYTHON) -u scripts/system_watch.py \
-		--interval $(SYSTEM_WATCH_INTERVAL) \
-		> "$(SYSTEM_WATCH_DIR)/system_watch.log" 2>&1 & echo $$! > "$(SYSTEM_WATCH_DIR)/system_watch.pid"
+	@cd $(TRAINING_ROOT) && \
+		nohup $(PYTHON) -u scripts/system_watch.py \
+			--interval $(SYSTEM_WATCH_INTERVAL) \
+			< /dev/null \
+			> "$(SYSTEM_WATCH_DIR)/system_watch.log" 2>&1 & \
+		pid=$$!; \
+		disown $$pid; \
+		echo $$pid > "$(SYSTEM_WATCH_DIR)/system_watch.pid"
 	@echo "started observe-system:"
 	@echo "  pid file: $(SYSTEM_WATCH_DIR)/system_watch.pid"
 	@echo "  live log:"

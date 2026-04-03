@@ -148,6 +148,9 @@ def process_one(raw_path, clips_dir, processed_dir, audio_proc, args):
         max_frames=args.max_frames,
         detect_every=args.detect_every,
         smooth_window=args.smooth_window,
+        smoothing_style=getattr(args, "smoothing_style", "official_inference"),
+        framing_style=getattr(args, "framing_style", "official_inference"),
+        inference_pads=tuple(getattr(args, "inference_pads", (0, 10, 0, 0))),
         save_preview=not args.no_preview,
         overwrite=False,
         ffmpeg_bin=args.ffmpeg_bin,
@@ -155,6 +158,7 @@ def process_one(raw_path, clips_dir, processed_dir, audio_proc, args):
         detector_backend=args.detector_backend,
         detector_device=args.detector_device,
         detector_batch_size=args.detector_batch_size,
+        min_detector_score=getattr(args, "min_detector_score", 0.0),
         resize_device=args.resize_device,
     )
     if status == "skip":
@@ -205,10 +209,14 @@ def build_args_dict(args):
         "max_frames": args.max_frames,
         "detect_every": args.detect_every,
         "smooth_window": args.smooth_window,
+        "smoothing_style": getattr(args, "smoothing_style", "official_inference"),
+        "framing_style": getattr(args, "framing_style", "official_inference"),
+        "inference_pads": tuple(getattr(args, "inference_pads", (0, 10, 0, 0))),
         "no_preview": args.no_preview,
         "detector_backend": args.detector_backend,
         "detector_device": args.detector_device,
         "detector_batch_size": args.detector_batch_size,
+        "min_detector_score": getattr(args, "min_detector_score", 0.0),
         "resize_device": args.resize_device,
     }
 

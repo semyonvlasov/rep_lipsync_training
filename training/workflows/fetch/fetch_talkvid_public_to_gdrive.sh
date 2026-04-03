@@ -42,6 +42,7 @@ FACECLIP_VIDEO_ENCODER="${TALKVID_FACECLIP_VIDEO_ENCODER:-auto}"
 FACECLIP_VIDEO_BITRATE="${TALKVID_FACECLIP_VIDEO_BITRATE:-420k}"
 FACECLIP_NORMALIZED_VIDEO_BITRATE="${TALKVID_FACECLIP_NORMALIZED_VIDEO_BITRATE:-15m}"
 SEAL_OPEN_BATCHES_ON_START="${TALKVID_SEAL_OPEN_BATCHES_ON_START:-1}"
+SKIP_PROCESSOR_LAUNCH="${TALKVID_SKIP_PROCESSOR_LAUNCH:-0}"
 CURRENT_STAGE="init"
 FETCH_PID=""
 PROCESSOR_PID=""
@@ -90,10 +91,16 @@ fetch_alive() {
 }
 
 processor_alive() {
+  if [[ "$SKIP_PROCESSOR_LAUNCH" == "1" ]]; then
+    return 1
+  fi
   [[ -n "$PROCESSOR_PID" ]] && kill -0 "$PROCESSOR_PID" 2>/dev/null
 }
 
 reap_processor_if_done() {
+  if [[ "$SKIP_PROCESSOR_LAUNCH" == "1" ]]; then
+    return 0
+  fi
   if [[ -z "$PROCESSOR_PID" ]] || processor_alive; then
     return 0
   fi
@@ -169,6 +176,9 @@ EOF
 }
 
 launch_processor() {
+  if [[ "$SKIP_PROCESSOR_LAUNCH" == "1" ]]; then
+    return 0
+  fi
   if processor_alive; then
     return 0
   fi
@@ -250,6 +260,7 @@ log_cycle "dest_folder_id=$DEST_FOLDER_ID"
 log_cycle "remote=$REMOTE_NAME batch_gb=$BATCH_GB fetch_target_gb=$FETCH_TARGET_GB jobs=$DOWNLOAD_JOBS rate_limit_cooldown_s=$RATE_LIMIT_COOLDOWN_SECONDS max_rate_limit_cooldowns=$MAX_RATE_LIMIT_COOLDOWNS"
 log_cycle "processor_python=$PYTHON_BIN detector=$FACECLIP_DETECTOR_BACKEND/$FACECLIP_DETECTOR_DEVICE resize_device=$FACECLIP_RESIZE_DEVICE video_encoder=$FACECLIP_VIDEO_ENCODER normalized_video_bitrate=$FACECLIP_NORMALIZED_VIDEO_BITRATE video_bitrate=$FACECLIP_VIDEO_BITRATE"
 log_cycle "seal_open_batches_on_start=$SEAL_OPEN_BATCHES_ON_START"
+log_cycle "skip_processor_launch=$SKIP_PROCESSOR_LAUNCH"
 if [[ -n "$COOKIES_FROM_BROWSER" ]]; then
   DOWNLOAD_COOKIE_ARGS=(--cookies-from-browser "$COOKIES_FROM_BROWSER")
   log_cycle "cookies_from_browser=$COOKIES_FROM_BROWSER"
@@ -292,7 +303,7 @@ done
 
 touch "$PROCESS_DONE_FLAG"
 reap_processor_if_done
-if processor_alive; then
+if [[ "$SKIP_PROCESSOR_LAUNCH" != "1" ]] && processor_alive; then
   CURRENT_STAGE="process_wait"
   PROCESS_RC=0
   wait "$PROCESSOR_PID" || PROCESS_RC=$?

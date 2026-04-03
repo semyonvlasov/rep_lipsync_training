@@ -21,10 +21,18 @@ audio:
 
 # --- SyncNet ---
 syncnet:
+  model_type: "local"       # "local" legacy simplified SyncNet, "mirror" official-faithful recipe
   epochs: 50
   batch_size: 64
   lr: 1.0e-4
   T: 5                    # temporal window (video frames)
+  eval_interval_steps: 0   # mirror/offline validation cadence; 0 disables periodic eval
+  eval_batches: 1400       # official-style eval window cap
+  eval_seed: 20260329      # fixed eval sampling seed so repeated evals stay comparable
+  pairwise_eval_samples: 200 # compare-style ranking eval on fixed sampled pairs
+  pairwise_eval_seed: 20260329
+  official_checkpoint: "models/official_syncnet/checkpoints/lipsync_expert.pth"
+  official_checkpoint_url: "https://drive.google.com/open?id=1_RUm6ncXDX2e_Qoyj24Yrvr6CGaBtPY4"
   checkpoint: null         # resume from
 
 # --- Generator ---
@@ -70,6 +78,21 @@ data:
   ffmpeg_bin: "ffmpeg"     # used for lazy mel extraction from faceclip mp4
   materialize_timeout: 600 # seconds to wait for another worker's cache build lock
   materialize_frames_size: null # optional override; defaults to model.img_size in train/check scripts
+  sync_alignment:
+    enabled: true
+    compute_if_missing: true
+    guard_mel_ticks: 10
+    search_mel_ticks: 10
+    samples: 0              # 0 => derive from clip length
+    sample_density_per_5s: 10.0
+    seed: 20260403
+    min_start_gap_ratio: 0.0
+    start_gap_multiple: 0
+    device: "auto"
+    batch_size: 640
+    outlier_trim_ratio: 0.2
+    syncnet_checkpoint: null # defaults to models/official_syncnet/checkpoints/lipsync_expert.pth
+    write_manifest: true
 
 # --- Training ---
 training:

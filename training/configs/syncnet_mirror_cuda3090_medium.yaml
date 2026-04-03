@@ -1,0 +1,51 @@
+# Wav2Lip-faithful SyncNetMirror train on our processed medium dataset.
+
+model:
+  img_size: 96
+  audio_encoder: "mel"
+  mel_steps: 16
+  base_channels: 32
+  predict_alpha: false
+
+audio:
+  sample_rate: 16000
+  n_fft: 800
+  hop_size: 200
+  win_size: 800
+  n_mels: 80
+  fmin: 55
+  fmax: 7600
+  preemphasis: 0.97
+
+syncnet:
+  model_type: "mirror"
+  epochs: 12
+  batch_size: 64
+  lr: 1.0e-4
+  T: 5
+  eval_interval_steps: 12000
+  eval_batches: 1400
+  eval_seed: 20260329
+  pairwise_eval_samples: 200
+  pairwise_eval_seed: 20260329
+  official_checkpoint: "models/official_syncnet/checkpoints/lipsync_expert.pth"
+  official_checkpoint_url: "https://drive.google.com/open?id=1_RUm6ncXDX2e_Qoyj24Yrvr6CGaBtPY4"
+
+data:
+  hdtf_root: "data/hdtf/processed"
+  talkvid_root: "data/talkvid/processed_medium"
+  fps: 25
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 4
+  cache_size: 16
+  skip_bad_samples: true
+
+training:
+  device: "cuda"
+  mixed_precision: false
+  allow_tf32: false
+  cudnn_benchmark: false
+  gradient_clip: 0.0
+  save_every: 1
+  output_dir: "output/training_cuda3090_syncnet_mirror_medium_20260329"

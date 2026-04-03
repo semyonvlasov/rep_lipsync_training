@@ -38,6 +38,23 @@ import torch
 from torch.utils.data import Dataset
 
 from .audio import AudioProcessor
+from .sync_alignment import (
+    DEFAULT_SYNCNET_CHECKPOINT,
+    DEFAULT_SYNC_ALIGNMENT_BATCH_SIZE,
+    DEFAULT_SYNC_ALIGNMENT_GUARD_MEL_TICKS,
+    DEFAULT_SYNC_ALIGNMENT_MIN_START_GAP_RATIO,
+    DEFAULT_SYNC_ALIGNMENT_OUTLIER_TRIM_RATIO,
+    DEFAULT_SYNC_ALIGNMENT_SAMPLE_DENSITY_PER_5S,
+    DEFAULT_SYNC_ALIGNMENT_SAMPLES,
+    DEFAULT_SYNC_ALIGNMENT_SEARCH_MEL_TICKS,
+    DEFAULT_SYNC_ALIGNMENT_SEED,
+    DEFAULT_SYNC_ALIGNMENT_START_GAP_MULTIPLE,
+    build_shifted_frame_aligned_mels,
+    compute_sync_alignment_from_faceclip,
+    load_sync_alignment,
+    upsert_sync_alignment,
+    write_sync_alignment_to_meta_path,
+)
 
 
 def _format_cache_value(value):
@@ -85,6 +102,7 @@ class LipSyncDataset(Dataset):
         audio_cfg=None,
         syncnet_T=5,
         mode="generator",
+        syncnet_style="local",
         cache_size=8,
         skip_bad_samples=True,
         speaker_allowlist=None,
@@ -92,12 +110,27 @@ class LipSyncDataset(Dataset):
         ffmpeg_bin="ffmpeg",
         materialize_timeout=600,
         materialize_frames_size=None,
+        sync_alignment_enabled=True,
+        sync_alignment_compute_if_missing=True,
+        sync_alignment_guard_mel_ticks=DEFAULT_SYNC_ALIGNMENT_GUARD_MEL_TICKS,
+        sync_alignment_search_mel_ticks=DEFAULT_SYNC_ALIGNMENT_SEARCH_MEL_TICKS,
+        sync_alignment_samples=DEFAULT_SYNC_ALIGNMENT_SAMPLES,
+        sync_alignment_sample_density_per_5s=DEFAULT_SYNC_ALIGNMENT_SAMPLE_DENSITY_PER_5S,
+        sync_alignment_seed=DEFAULT_SYNC_ALIGNMENT_SEED,
+        sync_alignment_min_start_gap_ratio=DEFAULT_SYNC_ALIGNMENT_MIN_START_GAP_RATIO,
+        sync_alignment_start_gap_multiple=DEFAULT_SYNC_ALIGNMENT_START_GAP_MULTIPLE,
+        sync_alignment_device="auto",
+        sync_alignment_batch_size=DEFAULT_SYNC_ALIGNMENT_BATCH_SIZE,
+        sync_alignment_outlier_trim_ratio=DEFAULT_SYNC_ALIGNMENT_OUTLIER_TRIM_RATIO,
+        sync_alignment_syncnet_checkpoint=None,
+        sync_alignment_write_manifest=True,
     ):
         self.img_size = img_size
         self.mel_step_size = mel_step_size
         self.fps = fps
         self.mode = mode
         self.syncnet_T = syncnet_T
+        self.syncnet_style = syncnet_style
         self.cache_size = max(int(cache_size), 0)
         self.skip_bad_samples = skip_bad_samples
         self.speaker_allowlist = (
@@ -112,6 +145,25 @@ class LipSyncDataset(Dataset):
         )
         self.audio_cfg = dict(audio_cfg or {})
         self._audio_proc = AudioProcessor(self.audio_cfg) if self.audio_cfg else None
+        self.sync_alignment_enabled = bool(sync_alignment_enabled and self.audio_cfg)
+        self.sync_alignment_compute_if_missing = bool(sync_alignment_compute_if_missing)
+        self.sync_alignment_guard_mel_ticks = max(0, int(sync_alignment_guard_mel_ticks))
+        self.sync_alignment_search_mel_ticks = max(0, int(sync_alignment_search_mel_ticks))
+        self.sync_alignment_samples = int(sync_alignment_samples or 0)
+        self.sync_alignment_sample_density_per_5s = max(0.1, float(sync_alignment_sample_density_per_5s))
+        self.sync_alignment_seed = int(sync_alignment_seed)
+        self.sync_alignment_min_start_gap_ratio = max(0.0, float(sync_alignment_min_start_gap_ratio))
+        self.sync_alignment_start_gap_multiple = max(0, int(sync_alignment_start_gap_multiple))
+        self.sync_alignment_device = sync_alignment_device
+        self.sync_alignment_batch_size = max(1, int(sync_alignment_batch_size))
+        self.sync_alignment_outlier_trim_ratio = min(
+            0.49,
+            max(0.0, float(sync_alignment_outlier_trim_ratio)),
+        )
+        self.sync_alignment_syncnet_checkpoint = (
+            sync_alignment_syncnet_checkpoint or DEFAULT_SYNCNET_CHECKPOINT
+        )
+        self.sync_alignment_write_manifest = bool(sync_alignment_write_manifest)
 
         if self.audio_cfg:
             self.mel_frames_per_second = (
@@ -163,6 +215,29 @@ class LipSyncDataset(Dataset):
                     stats["duplicates_skipped"] += 1
             self._root_stats.append(stats)
 
+        if self.sync_alignment_enabled and self.sync_alignment_compute_if_missing:
+            self._ensure_sync_alignment_for_lazy_entries()
+
+        if self.mode == "syncnet" and self.syncnet_style == "mirror":
+            min_frames = (3 * self.syncnet_T) + 1
+            filtered_speakers = []
+            skipped_short = 0
+            for key in self.speakers:
+                entry = self._entries[key]
+                try:
+                    frame_count = self._entry_frame_count(entry)
+                except Exception:
+                    frame_count = 0
+                if frame_count < min_frames:
+                    skipped_short += 1
+                    continue
+                filtered_speakers.append(key)
+            self.speakers = filtered_speakers
+            print(
+                f"[Dataset] SyncNetMirror prefilter: skipped {skipped_short} "
+                f"samples with < {min_frames} frames"
+            )
+
         print(f"[Dataset] Found {len(self.speakers)} samples from {len(roots)} roots")
         for stats in self._root_stats:
             print(
@@ -186,6 +261,8 @@ class LipSyncDataset(Dataset):
         print(f"[Dataset] Total: {self._total_frames} frames across {len(self.speakers)} samples")
 
         self._cache = OrderedDict()
+        if not self.speakers:
+            raise RuntimeError("Dataset is empty after filtering")
 
     @staticmethod
     def _normalize_materialize_frames_size(value):
@@ -336,12 +413,22 @@ class LipSyncDataset(Dataset):
         return os.path.join(base_root, f"{name}--{digest}")
 
     def _entry_frame_count(self, entry):
+        cached = entry.get("_frame_count")
+        if cached is not None:
+            return cached
         meta = entry.get("meta") or {}
-        count = int(meta.get("n_frames") or meta.get("frames") or 0)
+        sync_alignment = load_sync_alignment(meta)
+        if sync_alignment is not None:
+            count = int(sync_alignment.get("valid_frame_count") or 0)
+        else:
+            count = int(meta.get("n_frames") or meta.get("frames") or 0)
         if count > 0:
+            entry["_frame_count"] = count
             return count
         frames = np.load(entry["frames_path"], mmap_mode="r")
-        return int(frames.shape[0])
+        count = int(frames.shape[0])
+        entry["_frame_count"] = count
+        return count
 
     @staticmethod
     def _load_meta(entry):
@@ -424,14 +511,65 @@ class LipSyncDataset(Dataset):
     def _lock_path(self, target_path):
         return target_path + ".lock"
 
+    @staticmethod
+    def _lock_owner_alive(lock_path):
+        try:
+            with open(lock_path, "r", encoding="utf-8") as f:
+                first_line = f.readline().strip()
+        except OSError:
+            return None
+        if not first_line:
+            return None
+        pid_text = first_line.split()[0]
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            return None
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return None
+
+    def _clear_stale_lock(self, lock_path):
+        try:
+            age = time.time() - os.path.getmtime(lock_path)
+        except FileNotFoundError:
+            return False
+        if age <= self.materialize_timeout:
+            return False
+        owner_alive = self._lock_owner_alive(lock_path)
+        if owner_alive is True:
+            return False
+        try:
+            os.remove(lock_path)
+            print(
+                f"[Dataset] Removed stale lock after {age:.1f}s: {lock_path}",
+                flush=True,
+            )
+            return True
+        except FileNotFoundError:
+            return False
+
     def _acquire_lock(self, lock_path):
         started = time.time()
         while True:
             try:
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                try:
+                    payload = f"{os.getpid()} {time.time():.6f}\n".encode("utf-8")
+                    os.write(fd, payload)
+                except OSError:
+                    pass
                 os.close(fd)
                 return
             except FileExistsError:
+                if self._clear_stale_lock(lock_path):
+                    continue
                 if time.time() - started > self.materialize_timeout:
                     raise TimeoutError(f"Timeout acquiring lock for {lock_path}")
                 time.sleep(0.1)
@@ -538,6 +676,231 @@ class LipSyncDataset(Dataset):
         self._materialize_frames(entry)
         self._materialize_mel(entry)
 
+    def _ensure_sync_alignment_for_lazy_entries(self):
+        missing = []
+        for key in self.speakers:
+            entry = self._entries.get(key)
+            if not entry or entry.get("type") != "lazy":
+                continue
+            meta = self._load_meta(entry)
+            if load_sync_alignment(meta) is None:
+                missing.append(entry)
+
+        if not missing:
+            return
+
+        if not self.sync_alignment_syncnet_checkpoint or not os.path.exists(self.sync_alignment_syncnet_checkpoint):
+            raise FileNotFoundError(
+                "Sync alignment is enabled but the official SyncNet checkpoint is missing: "
+                f"{self.sync_alignment_syncnet_checkpoint}"
+            )
+
+        print(
+            f"[Dataset] Sync alignment: computing {len(missing)} missing lazy manifests "
+            f"using {self.sync_alignment_syncnet_checkpoint}",
+            flush=True,
+        )
+        for idx, entry in enumerate(missing, start=1):
+            self._ensure_entry_sync_alignment(entry)
+            print(
+                f"[Dataset] Sync alignment [{idx}/{len(missing)}] {entry['name']}",
+                flush=True,
+            )
+
+    def _ensure_entry_sync_alignment(self, entry):
+        meta = self._load_meta(entry)
+        if load_sync_alignment(meta) is not None:
+            return meta
+
+        if entry.get("type") != "lazy":
+            return meta
+
+        self._materialize_lazy_entry(entry)
+
+        lock_path = self._lock_path(entry["meta_path"] + ".sync")
+        self._acquire_lock(lock_path)
+        try:
+            meta = _load_json(entry["meta_path"])
+            entry["meta"] = meta
+            if load_sync_alignment(meta) is not None:
+                return meta
+
+            frames = np.load(entry["frames_path"], mmap_mode="r")
+            mel = np.load(entry["mel_path"])
+            source_fps = float(meta.get("fps", self.fps) or self.fps)
+            frames = self._normalize_frames_to_target_fps(frames, source_fps)
+
+            result = compute_sync_alignment_from_faceclip(
+                frames=frames,
+                mel=mel,
+                fps=self.fps,
+                mel_frames_per_second=self.mel_frames_per_second,
+                mel_step_size=self.mel_step_size,
+                syncnet_T=self.syncnet_T,
+                checkpoint_path=self.sync_alignment_syncnet_checkpoint,
+                device=self.sync_alignment_device,
+                search_mel_ticks=self.sync_alignment_search_mel_ticks,
+                search_guard_mel_ticks=self.sync_alignment_guard_mel_ticks,
+                samples=self.sync_alignment_samples,
+                sample_density_per_5s=self.sync_alignment_sample_density_per_5s,
+                seed=self.sync_alignment_seed,
+                min_start_gap_ratio=self.sync_alignment_min_start_gap_ratio,
+                start_gap_multiple=self.sync_alignment_start_gap_multiple,
+                batch_size=self.sync_alignment_batch_size,
+                outlier_trim_ratio=self.sync_alignment_outlier_trim_ratio,
+            )
+
+            extra = {
+                "compute_device": result["device"],
+                "starts": result["starts"],
+                "kept_starts": result.get("kept_starts", []),
+                "dropped_starts": result.get("dropped_starts", []),
+                "local_best_shifts": result.get("local_best_shifts", []),
+                "local_best_shift_center": result.get("local_best_shift_center"),
+                "num_points_before_trim": result.get("num_points_before_trim"),
+                "num_points_after_trim": result.get("num_points_after_trim"),
+                "outlier_trim_ratio": result.get("outlier_trim_ratio"),
+                "sample_density_per_5s": result.get("sample_density_per_5s"),
+            }
+            updated_meta = upsert_sync_alignment(
+                meta,
+                audio_shift_mel_ticks=result["audio_shift_mel_ticks"],
+                n_frames=len(frames),
+                mel_total_steps=int(mel.shape[1]),
+                fps=self.fps,
+                mel_frames_per_second=self.mel_frames_per_second,
+                mel_step_size=self.mel_step_size,
+                search_guard_mel_ticks=self.sync_alignment_guard_mel_ticks,
+                source="computed_on_demand",
+                search_range_mel_ticks=self.sync_alignment_search_mel_ticks,
+                search_samples=result["samples"],
+                search_seed=self.sync_alignment_seed,
+                min_start_gap_ratio=self.sync_alignment_min_start_gap_ratio,
+                start_gap_multiple=self.sync_alignment_start_gap_multiple,
+                best_mean_loss=result["best_mean_loss"],
+                zero_mean_loss=result["zero_mean_loss"],
+                extra=extra,
+            )
+            if self.sync_alignment_write_manifest:
+                updated_meta = write_sync_alignment_to_meta_path(
+                    entry["meta_path"],
+                    meta,
+                    audio_shift_mel_ticks=result["audio_shift_mel_ticks"],
+                    n_frames=len(frames),
+                    mel_total_steps=int(mel.shape[1]),
+                    fps=self.fps,
+                    mel_frames_per_second=self.mel_frames_per_second,
+                    mel_step_size=self.mel_step_size,
+                    search_guard_mel_ticks=self.sync_alignment_guard_mel_ticks,
+                    source="computed_on_demand",
+                    search_range_mel_ticks=self.sync_alignment_search_mel_ticks,
+                    search_samples=result["samples"],
+                    search_seed=self.sync_alignment_seed,
+                    min_start_gap_ratio=self.sync_alignment_min_start_gap_ratio,
+                    start_gap_multiple=self.sync_alignment_start_gap_multiple,
+                    best_mean_loss=result["best_mean_loss"],
+                    zero_mean_loss=result["zero_mean_loss"],
+                    extra=extra,
+                )
+            entry["meta"] = updated_meta
+            entry["_frame_count"] = int(
+                updated_meta["sync_alignment"].get("valid_frame_count") or 0
+            )
+            return updated_meta
+        finally:
+            self._release_lock(lock_path)
+
+    def _apply_sync_alignment(self, entry, frames, mel, meta):
+        sync_alignment = load_sync_alignment(meta)
+        if sync_alignment is None:
+            chunks = self._build_frame_aligned_mels(mel, len(frames))
+            return frames, chunks, meta
+
+        audio_shift_mel_ticks = int(sync_alignment.get("audio_shift_mel_ticks") or 0)
+        chunks, valid_indices = build_shifted_frame_aligned_mels(
+            mel,
+            n_frames=len(frames),
+            fps=self.fps,
+            mel_frames_per_second=self.mel_frames_per_second,
+            mel_step_size=self.mel_step_size,
+            audio_shift_mel_ticks=audio_shift_mel_ticks,
+        )
+        if not valid_indices:
+            return frames[:0], [], meta
+
+        valid_start = valid_indices[0]
+        valid_end = valid_indices[-1] + 1
+        if len(valid_indices) == (valid_end - valid_start):
+            aligned_frames = frames[valid_start:valid_end]
+        else:
+            aligned_frames = frames[np.asarray(valid_indices, dtype=np.int64)]
+
+        if self.sync_alignment_write_manifest:
+            recorded_start = int(sync_alignment.get("valid_frame_start", valid_start))
+            recorded_end = int(sync_alignment.get("valid_frame_end", valid_end - 1))
+            recorded_count = int(sync_alignment.get("valid_frame_count", len(valid_indices)))
+            if (
+                recorded_start != valid_start
+                or recorded_end != (valid_end - 1)
+                or recorded_count != len(valid_indices)
+            ):
+                updated_meta = write_sync_alignment_to_meta_path(
+                    entry["meta_path"],
+                    meta,
+                    audio_shift_mel_ticks=audio_shift_mel_ticks,
+                    n_frames=len(frames),
+                    mel_total_steps=int(mel.shape[1]),
+                    fps=self.fps,
+                    mel_frames_per_second=self.mel_frames_per_second,
+                    mel_step_size=self.mel_step_size,
+                    search_guard_mel_ticks=int(
+                        sync_alignment.get(
+                            "search_guard_mel_ticks",
+                            self.sync_alignment_guard_mel_ticks,
+                        )
+                    ),
+                    source=str(sync_alignment.get("source", "manifest_refresh")),
+                    search_range_mel_ticks=sync_alignment.get("search_range_mel_ticks"),
+                    search_samples=sync_alignment.get("search_samples"),
+                    search_seed=sync_alignment.get("search_seed"),
+                    min_start_gap_ratio=sync_alignment.get("min_start_gap_ratio"),
+                    start_gap_multiple=sync_alignment.get("start_gap_multiple"),
+                    best_mean_loss=sync_alignment.get("best_mean_loss"),
+                    zero_mean_loss=sync_alignment.get("zero_mean_loss"),
+                    extra={
+                        key: value
+                        for key, value in sync_alignment.items()
+                        if key
+                        not in {
+                            "version",
+                            "status",
+                            "source",
+                            "audio_shift_mel_ticks",
+                            "fps",
+                            "mel_frames_per_second",
+                            "mel_step_size",
+                            "mel_total_steps",
+                            "n_frames_total",
+                            "valid_frame_start",
+                            "valid_frame_end",
+                            "valid_frame_count",
+                            "search_guard_mel_ticks",
+                            "computed_at",
+                            "search_range_mel_ticks",
+                            "search_samples",
+                            "search_seed",
+                            "min_start_gap_ratio",
+                            "start_gap_multiple",
+                            "best_mean_loss",
+                            "zero_mean_loss",
+                        }
+                    },
+                )
+                entry["meta"] = updated_meta
+                meta = updated_meta
+
+        return aligned_frames, chunks, meta
+
     def _load_speaker(self, speaker_ref):
         entry = self._entries.get(speaker_ref)
         if entry is None:
@@ -557,6 +920,9 @@ class LipSyncDataset(Dataset):
             self._cache[cache_key] = data
             return data
 
+        if self.sync_alignment_enabled and entry["type"] == "lazy":
+            self._ensure_entry_sync_alignment(entry)
+
         if entry["type"] == "lazy":
             self._materialize_lazy_entry(entry)
 
@@ -566,7 +932,7 @@ class LipSyncDataset(Dataset):
 
         source_fps = float(meta.get("fps", self.fps) or self.fps)
         frames = self._normalize_frames_to_target_fps(frames, source_fps)
-        chunks = self._build_frame_aligned_mels(mel, len(frames))
+        frames, chunks, meta = self._apply_sync_alignment(entry, frames, mel, meta)
 
         data = (frames, chunks, meta)
         self._cache[cache_key] = data
@@ -575,6 +941,22 @@ class LipSyncDataset(Dataset):
         return data
 
     def __getitem__(self, idx):
+        if self.mode == "syncnet" and self.syncnet_style == "mirror":
+            max_attempts = max(16, min(len(self.speakers), 128))
+            for _ in range(max_attempts):
+                sp_idx = random.choices(range(len(self.speakers)), weights=self._frame_counts, k=1)[0]
+                speaker_key = self.speakers[sp_idx]
+                try:
+                    frames, mel_chunks, _ = self._load_speaker(speaker_key)
+                    sample = self._get_syncnet_sample(frames, mel_chunks)
+                    if sample is not None:
+                        return sample
+                except Exception as e:
+                    name = self._entries.get(speaker_key, {}).get("name", str(speaker_key))
+                    print(f"[Dataset] ERROR loading {name}: {e}")
+                    continue
+            raise RuntimeError("SyncNetMirror could not produce a valid sample after retries")
+
         sp_idx = random.choices(range(len(self.speakers)), weights=self._frame_counts, k=1)[0]
         speaker_key = self.speakers[sp_idx]
 
@@ -586,11 +968,7 @@ class LipSyncDataset(Dataset):
             S = self.img_size
             T = self.syncnet_T
             if self.mode == "syncnet":
-                return (
-                    torch.zeros(T * 3, S // 2, S),
-                    torch.zeros(1, 80, T * self.mel_step_size),
-                    torch.tensor(1.0),
-                )
+                return self._empty_syncnet_sample()
             return (
                 torch.zeros(6, T, S, S),
                 torch.zeros(T, 1, 80, self.mel_step_size),
@@ -601,6 +979,19 @@ class LipSyncDataset(Dataset):
         if self.mode == "syncnet":
             return self._get_syncnet_sample(frames, mel_chunks)
         return self._get_generator_sample(frames, mel_chunks)
+
+    def _empty_syncnet_sample(self):
+        S = self.img_size
+        T = self.syncnet_T
+        if self.syncnet_style == "mirror":
+            audio = torch.zeros(1, 80, self.mel_step_size)
+        else:
+            audio = torch.zeros(1, 80, T * self.mel_step_size)
+        return (
+            torch.zeros(T * 3, S // 2, S),
+            audio,
+            torch.tensor(1.0),
+        )
 
     def _build_generator_sample(self, frames, mel_chunks, start, ref_start):
         S = self.img_size
@@ -657,16 +1048,15 @@ class LipSyncDataset(Dataset):
         return self._build_generator_sample(frames, mel_chunks, start, ref_start)
 
     def _get_syncnet_sample(self, frames, mel_chunks):
+        if self.syncnet_style == "mirror":
+            return self._get_syncnet_mirror_sample(frames, mel_chunks)
+
         S = self.img_size
         T = self.syncnet_T
         n_frames = min(len(frames), len(mel_chunks))
 
         if n_frames < T + 5:
-            return (
-                torch.zeros(T * 3, S // 2, S),
-                torch.zeros(1, 80, T * self.mel_step_size),
-                torch.tensor(1.0),
-            )
+            return self._empty_syncnet_sample()
 
         start = random.randint(0, n_frames - T - 1)
 
@@ -697,5 +1087,38 @@ class LipSyncDataset(Dataset):
         return (
             torch.from_numpy(visual),
             torch.from_numpy(audio),
+            torch.tensor(1.0 if is_sync else 0.0),
+        )
+
+    def _get_syncnet_mirror_sample(self, frames, mel_chunks):
+        S = self.img_size
+        T = self.syncnet_T
+        n_frames = min(len(frames), len(mel_chunks))
+
+        if n_frames <= 3 * T:
+            return None
+
+        start = random.randint(0, n_frames - T)
+        wrong_start = random.randint(0, n_frames - T)
+        while wrong_start == start:
+            wrong_start = random.randint(0, n_frames - T)
+
+        is_sync = random.random() > 0.5
+        chosen_start = start if is_sync else wrong_start
+
+        visual_frames = []
+        for t in range(T):
+            face = frames[chosen_start + t]
+            if face.shape[0] != S or face.shape[1] != S:
+                import cv2
+                face = cv2.resize(face, (S, S))
+            lower = face[S // 2:, :, :]
+            visual_frames.append(lower.astype(np.float32) / 255.0)
+
+        visual = np.concatenate([f.transpose(2, 0, 1) for f in visual_frames], axis=0)
+        audio = mel_chunks[min(start, len(mel_chunks) - 1)][np.newaxis]
+        return (
+            torch.from_numpy(np.ascontiguousarray(visual)),
+            torch.from_numpy(np.ascontiguousarray(audio)),
             torch.tensor(1.0 if is_sync else 0.0),
         )
