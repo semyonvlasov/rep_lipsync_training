@@ -8,6 +8,8 @@ REMOTE ?= root@ssh9.vast.ai
 PORT ?= 22
 REMOTE_ROOT ?= /root/lipsync_test/rep_lipsync_training
 REMOTE_PYTHON ?= python3
+REMOTE_GIT_URL ?=
+REMOTE_GIT_BRANCH ?= main
 OFFICIAL_SYNCNET_CKPT ?=
 OFFICIAL_SYNCNET_URL ?= https://drive.google.com/open?id=1_RUm6ncXDX2e_Qoyj24Yrvr6CGaBtPY4
 OFFICIAL_SYNCNET_SKIP_UPLOAD ?= 1
@@ -106,7 +108,7 @@ PUBLISH_SKIP_UPLOAD ?= 0
 help:
 	@echo "Available targets:"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
-	@echo "  make remote-sync-code # upload repo training code + official SyncNet assets to a remote box"
+	@echo "  make remote-sync-code # clone/pull the latest repo on a remote box and sync the official SyncNet checkpoint"
 	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box"
 	@echo "  make remote-rclone-config # upload local rclone.conf so the remote can access Drive"
 	@echo "  make remote-prewarm-sfd # instantiate the SFD detector once so the checkpoint is cached on the remote"
@@ -133,6 +135,7 @@ help:
 	@echo "  REMOTE=root@ssh9.vast.ai"
 	@echo "  PORT=24380"
 	@echo "  REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training"
+	@echo "  REMOTE_GIT_BRANCH=main"
 	@echo "  FACECLIP_MONITOR_NAME=remote-3090"
 	@echo "  OFFICIAL_SYNCNET_CKPT=/abs/path/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_URL=https://drive.google.com/open?id=..."
@@ -175,6 +178,8 @@ server-setup:
 
 remote-sync-code:
 	PORT="$(PORT)" REMOTE="$(REMOTE)" REMOTE_ROOT="$(REMOTE_ROOT)" \
+		REMOTE_GIT_URL="$(REMOTE_GIT_URL)" \
+		REMOTE_GIT_BRANCH="$(REMOTE_GIT_BRANCH)" \
 		OFFICIAL_SYNCNET_CKPT="$(OFFICIAL_SYNCNET_CKPT)" \
 		OFFICIAL_SYNCNET_URL="$(OFFICIAL_SYNCNET_URL)" \
 		OFFICIAL_SYNCNET_SKIP_UPLOAD="$(OFFICIAL_SYNCNET_SKIP_UPLOAD)" \
