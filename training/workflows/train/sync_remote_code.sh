@@ -53,6 +53,7 @@ rsync -a --whole-file --partial --progress -e "$RSYNC_RSH" \
   "$REPO_ROOT/training/data/__init__.py" \
   "$REPO_ROOT/training/data/audio.py" \
   "$REPO_ROOT/training/data/dataset.py" \
+  "$REPO_ROOT/training/data/sync_alignment.py" \
   "$REMOTE:$REMOTE_ROOT/training/data/"
 
 echo "[sync] Uploading top-level Makefile..."

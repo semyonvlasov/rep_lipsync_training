@@ -11,6 +11,10 @@ REMOTE_PYTHON ?= python3
 OFFICIAL_SYNCNET_CKPT ?=
 OFFICIAL_SYNCNET_URL ?= https://drive.google.com/open?id=1_RUm6ncXDX2e_Qoyj24Yrvr6CGaBtPY4
 OFFICIAL_SYNCNET_SKIP_UPLOAD ?= 1
+RCLONE_CONFIG_PATH ?= $(HOME)/.config/rclone/rclone.conf
+REMOTE_RCLONE_CONFIG ?= /root/.config/rclone/rclone.conf
+REMOTE_RCLONE_DIR ?= /root/.config/rclone
+REMOTE_RCLONE_PARENT ?= /root/.config
 
 SERVER_PY_REQUIREMENTS := $(TRAINING_ROOT)/requirements-server.txt
 
@@ -88,13 +92,14 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help server-setup remote-sync-code remote-server-setup remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help server-setup remote-sync-code remote-server-setup remote-rclone-config remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
 	@echo "  make remote-sync-code # upload repo training code + official SyncNet assets to a remote box"
 	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box"
+	@echo "  make remote-rclone-config # upload local rclone.conf so the remote can access Drive"
 	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
 	@echo "  make remote-observe-system # start the remote system observer"
 	@echo "  make remote-bootstrap # sync code, install deps, and start the remote observer"
@@ -177,6 +182,25 @@ remote-server-setup:
 	"
 	@echo "remote-server-setup complete: $(REMOTE):$(REMOTE_ROOT)"
 
+remote-rclone-config:
+	@if [ ! -f "$(RCLONE_CONFIG_PATH)" ]; then \
+		echo "remote-rclone-config: missing local rclone config at $(RCLONE_CONFIG_PATH)"; \
+		exit 1; \
+	fi
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		mkdir -p '$(REMOTE_RCLONE_DIR)'; \
+		chmod 700 '$(REMOTE_RCLONE_PARENT)' '$(REMOTE_RCLONE_DIR)' 2>/dev/null || true; \
+	"
+	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$(PORT)" \
+		"$(RCLONE_CONFIG_PATH)" "$(REMOTE):$(REMOTE_RCLONE_CONFIG)"
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		chmod 600 '$(REMOTE_RCLONE_CONFIG)'; \
+		rclone listremotes >/dev/null; \
+	"
+	@echo "remote-rclone-config complete: $(REMOTE):$(REMOTE_RCLONE_CONFIG)"
+
 remote-fetch-official-syncnet:
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
 		set -euo pipefail; \
@@ -186,27 +210,27 @@ remote-fetch-official-syncnet:
 	@echo "remote-fetch-official-syncnet complete: $(REMOTE):$(REMOTE_ROOT)"
 
 remote-observe-system:
-	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
 		set -euo pipefail; \
-		mkdir -p '$(REMOTE_ROOT)/training/output/system_observe'; \
-		pids=\$$(pgrep -f '[s]cripts/system_watch.py' || true); \
+		mkdir -p \"$(REMOTE_ROOT)/training/output/system_observe\"; \
+		pids=\$$(pgrep -f \"[s]cripts/system_watch.py\" || true); \
 		if [ -n \"\$$pids\" ]; then \
 			echo \"\$$pids\" | xargs -r kill 2>/dev/null || true; \
 			sleep 1; \
 		fi; \
-		: > '$(REMOTE_ROOT)/training/output/system_observe/system_watch.log'; \
-		cd '$(REMOTE_ROOT)/training'; \
-		setsid -f $(REMOTE_PYTHON) -u scripts/system_watch.py --interval '$(SYSTEM_WATCH_INTERVAL)' \
-			< /dev/null > '$(REMOTE_ROOT)/training/output/system_observe/system_watch.log' 2>&1; \
-		sleep 1; \
-		pgrep -n -f '[s]cripts/system_watch.py' > '$(REMOTE_ROOT)/training/output/system_observe/system_watch.pid'; \
-	"
+		: > \"$(REMOTE_ROOT)/training/output/system_observe/system_watch.log\"; \
+		cd \"$(REMOTE_ROOT)/training\"; \
+		nohup $(REMOTE_PYTHON) -u scripts/system_watch.py --interval \"$(SYSTEM_WATCH_INTERVAL)\" \
+			< /dev/null > \"$(REMOTE_ROOT)/training/output/system_observe/system_watch.log\" 2>&1 & \
+		echo \$$! > \"$(REMOTE_ROOT)/training/output/system_observe/system_watch.pid\"; \
+	'"
 	@echo "remote-observe-system complete: $(REMOTE):$(REMOTE_ROOT)"
 
-remote-bootstrap: remote-sync-code remote-server-setup remote-fetch-official-syncnet remote-observe-system
+remote-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remote-fetch-official-syncnet remote-observe-system
 	@echo "remote-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
 
-remote-faceclip-bootstrap: remote-sync-code remote-server-setup remote-observe-system
+remote-faceclip-bootstrap: remote-sync-code remote-server-setup remote-rclone-config
+	-@$(MAKE) remote-observe-system REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" SYSTEM_WATCH_INTERVAL="$(SYSTEM_WATCH_INTERVAL)"
 	@echo "remote-faceclip-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
 
 dataset:

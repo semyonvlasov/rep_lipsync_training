@@ -1,6 +1,5 @@
-#!/bin/zsh
+#!/bin/bash
 set -euo pipefail
-unsetopt BG_NICE
 
 TRAINING_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$TRAINING_ROOT"
@@ -16,7 +15,7 @@ mkdir -p "$DATA_ROOT" "$OUT_DIR"
 SOURCE_FOLDER_ID="${FACECLIP_SOURCE_FOLDER_ID:-1v06momk8fR-eqw79Z93zczBx_InWsCS9}"
 DEST_FOLDER_ID="${FACECLIP_DEST_FOLDER_ID:-1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n}"
 REMOTE_NAME="${FACECLIP_GDRIVE_REMOTE:-gdrive:}"
-PYTHON_BIN="${FACECLIP_PYTHON_BIN:-/opt/homebrew/Caskroom/miniforge/base/envs/musetalk/bin/python}"
+PYTHON_BIN="${FACECLIP_PYTHON_BIN:-python3}"
 
 IMG_SIZE="${FACECLIP_SIZE:-288}"
 FPS="${FACECLIP_FPS:-25}"
