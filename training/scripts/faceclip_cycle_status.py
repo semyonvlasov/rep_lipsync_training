@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
+import subprocess
 from pathlib import Path
 
 
@@ -94,6 +96,96 @@ def pid_alive(pid_path: Path) -> bool:
     except OSError:
         return False
     return True
+
+
+def read_pid(pid_path: Path) -> int | None:
+    if not pid_path.exists():
+        return None
+    try:
+        return int(pid_path.read_text().strip())
+    except Exception:
+        return None
+
+
+def infer_remote_root(manifest_path: Path) -> Path | None:
+    for parent in manifest_path.parents:
+        if parent.name == "training":
+            return parent.parent
+    return None
+
+
+def build_expected_process_paths(remote_root: Path) -> dict[str, Path]:
+    return {
+        "cycle": remote_root / "training/scripts/process_raw_archives_to_lazy_faceclips_gdrive.py",
+        "exporter": remote_root / "training/scripts/export_faceclip_batch.py",
+        "launcher": remote_root / "training/workflows/preprocess/process_faceclip_archives_local.sh",
+    }
+
+
+def process_matches_faceclip_cycle(args_str: str, expected_paths: dict[str, Path]) -> bool:
+    try:
+        argv = shlex.split(args_str)
+    except Exception:
+        argv = args_str.split()
+    if not argv:
+        return False
+
+    exe_name = Path(argv[0]).name.lower()
+    if "python" in exe_name and len(argv) >= 2:
+        script_path = Path(argv[1])
+        return script_path in {expected_paths["cycle"], expected_paths["exporter"]}
+
+    if exe_name in {"bash", "sh", "zsh"} and len(argv) >= 2:
+        script_path = Path(argv[1])
+        return script_path == expected_paths["launcher"]
+
+    return False
+
+
+def discover_cycle_pids(remote_root: Path) -> list[int]:
+    expected_paths = build_expected_process_paths(remote_root)
+    try:
+        proc = subprocess.run(
+            ["ps", "-eo", "pid=,args="],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return []
+
+    pids: list[int] = []
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            pid_str, args_str = line.split(None, 1)
+            pid = int(pid_str)
+        except Exception:
+            continue
+        if process_matches_faceclip_cycle(args_str, expected_paths):
+            pids.append(pid)
+    return pids
+
+
+def detect_cycle_alive(manifest_path: Path, cycle_pid_path: Path | None) -> tuple[bool, int | None]:
+    remote_root = infer_remote_root(manifest_path)
+    stored_pid = read_pid(cycle_pid_path) if cycle_pid_path else None
+
+    if remote_root is None:
+        if stored_pid is None:
+            return False, None
+        return pid_alive(Path(cycle_pid_path)), stored_pid
+
+    live_pids = discover_cycle_pids(remote_root)
+    if stored_pid is not None and stored_pid in live_pids:
+        return True, stored_pid
+    if live_pids:
+        return True, live_pids[0]
+    if stored_pid is None:
+        return False, None
+    return pid_alive(Path(cycle_pid_path)), stored_pid
 
 
 def build_status_text(status: str, archive_name: str | None, progress_done: int | None, progress_total: int | None, *, last_stage: str | None = None) -> str:
@@ -212,7 +304,7 @@ def main() -> int:
     manifest_path = Path(args.manifest_path)
     state_path = manifest_path.with_name(STATE_MANIFEST_BASENAME)
     cycle_pid_path = Path(args.cycle_pid_path) if args.cycle_pid_path else Path()
-    cycle_alive = pid_alive(cycle_pid_path) if args.cycle_pid_path else False
+    cycle_alive, detected_pid = detect_cycle_alive(manifest_path, cycle_pid_path if args.cycle_pid_path else None)
 
     state = load_json(state_path)
     if isinstance(state, dict):
@@ -220,6 +312,9 @@ def main() -> int:
     else:
         record = read_last_jsonl_record(manifest_path)
         payload = payload_from_last_record(record, cycle_alive)
+
+    if detected_pid is not None:
+        payload["cycle_pid"] = detected_pid
 
     print(json.dumps(payload, ensure_ascii=False))
     return 0
