@@ -52,6 +52,7 @@ from .sync_alignment import (
     build_shifted_frame_aligned_mels,
     compute_sync_alignment_from_faceclip,
     load_sync_alignment,
+    upsert_sync_alignment,
     write_sync_alignment_to_meta_path,
     write_failed_sync_alignment_to_meta_path,
 )
