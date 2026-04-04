@@ -33,7 +33,6 @@ DEFAULT_TARGETS = {
     "talkvid_raw": "data/talkvid_remote/raw",
     "talkvid_processed": "data/talkvid/processed",
     "talkvid_processed_soft": "data/talkvid/processed_soft",
-    "talkvid_processed_medium": "data/talkvid/processed_medium",
     "talkvid_processed_strict": "data/talkvid/processed_strict",
 }
 
@@ -92,7 +91,7 @@ def map_processed_stage_key(processed_key):
     if processed_key == "talkvid_soft":
         return "talkvid_processed_soft"
     if processed_key == "talkvid_medium":
-        return "talkvid_processed_medium"
+        return "talkvid_processed"
     if processed_key == "talkvid_strict":
         return "talkvid_processed_strict"
     return None

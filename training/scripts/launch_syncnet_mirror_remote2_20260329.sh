@@ -40,7 +40,7 @@ roots = []
 for tier in hdtf_tiers:
     roots.append(("hdtf", tier, training_root / "data" / "hdtf" / "processed" / "_lazy_imports" / tier))
 for tier in talkvid_tiers:
-    roots.append(("talkvid", tier, training_root / "data" / "talkvid" / "processed_medium" / "_lazy_imports" / tier))
+    roots.append(("talkvid", tier, training_root / "data" / "talkvid" / "processed" / "_lazy_imports" / tier))
 
 items = []
 source_counts = {}

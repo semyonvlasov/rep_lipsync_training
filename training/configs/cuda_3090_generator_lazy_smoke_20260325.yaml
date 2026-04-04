@@ -38,7 +38,7 @@ generator:
 
 data:
   hdtf_root: "data/hdtf/processed"
-  talkvid_root: "data/talkvid/processed_medium"
+  talkvid_root: "data/talkvid/processed"
   fps: 25
   num_workers: 4
   crop_size: 256

@@ -12,7 +12,7 @@ TRAIN_CONFIG="${TRAIN_CONFIG:-configs/lipsync_cuda3090_hdtf_talkvid.yaml}"
 OFFICIAL_SYNCNET_PATH="${OFFICIAL_SYNCNET_PATH:-${SYNCNET_PATH:-../models/official_syncnet/checkpoints/lipsync_expert.pth}}"
 GDRIVE_FOLDER_URL="${GDRIVE_FOLDER_URL:-https://drive.google.com/drive/folders/1v06momk8fR-eqw79Z93zczBx_InWsCS9?usp=drive_link}"
 IMPORT_SOURCE_DIR="${IMPORT_SOURCE_DIR:-}"
-DEFAULT_TALKVID_PROCESSED="${DEFAULT_TALKVID_PROCESSED:-talkvid_medium}"
+DEFAULT_TALKVID_PROCESSED="${DEFAULT_TALKVID_PROCESSED:-talkvid}"
 TALKVID_HEAD_FILTER_MODE="${TALKVID_HEAD_FILTER_MODE:-off}"
 TALKVID_MIN_QUALITY="${TALKVID_MIN_QUALITY:-medium}"
 TALKVID_QUALITY_OUTPUT_DIR="${TALKVID_QUALITY_OUTPUT_DIR:-$OUTPUT_DIR/talkvid_quality}"
@@ -56,7 +56,8 @@ case "$DEFAULT_TALKVID_PROCESSED" in
     TALKVID_PROCESSED_ROOT="data/talkvid/processed_soft"
     ;;
   talkvid_medium)
-    TALKVID_PROCESSED_ROOT="data/talkvid/processed_medium"
+    echo "[pipeline] WARNING: DEFAULT_TALKVID_PROCESSED=talkvid_medium is deprecated; using data/talkvid/processed" >&2
+    TALKVID_PROCESSED_ROOT="data/talkvid/processed"
     ;;
   talkvid_strict)
     TALKVID_PROCESSED_ROOT="data/talkvid/processed_strict"
@@ -203,7 +204,6 @@ roots = {
     "talkvid_raw": Path("data/talkvid_remote/raw"),
     "talkvid": Path("data/talkvid/processed"),
     "talkvid_soft": Path("data/talkvid/processed_soft"),
-    "talkvid_medium": Path("data/talkvid/processed_medium"),
     "talkvid_strict": Path("data/talkvid/processed_strict"),
 }
 
@@ -219,7 +219,7 @@ for name, root in roots.items():
                 count += 1
     print(f"[pipeline] dataset={name} speakers={count} root={root}", flush=True)
 PY
-du -sh data/hdtf/raw data/hdtf/clips data/hdtf/processed data/talkvid_remote/raw data/talkvid/processed data/talkvid/processed_soft data/talkvid/processed_medium data/talkvid/processed_strict 2>/dev/null || true
+du -sh data/hdtf/raw data/hdtf/clips data/hdtf/processed data/talkvid_remote/raw data/talkvid/processed data/talkvid/processed_soft data/talkvid/processed_strict 2>/dev/null || true
 
 echo "[pipeline] Preparing HDTF at $(date '+%Y-%m-%d %H:%M:%S %Z')"
 if [[ -d data/hdtf/clips ]] && has_find_match data/hdtf/clips -maxdepth 1 -name '*.mp4'; then

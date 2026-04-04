@@ -1,4 +1,4 @@
-# Wav2Lip-faithful SyncNetMirror train on our processed medium dataset.
+# Wav2Lip-faithful SyncNetMirror train on our merged TalkVid lazy dataset.
 
 model:
   img_size: 96
@@ -33,7 +33,7 @@ syncnet:
 
 data:
   hdtf_root: "data/hdtf/processed"
-  talkvid_root: "data/talkvid/processed_medium"
+  talkvid_root: "data/talkvid/processed"
   fps: 25
   num_workers: 8
   persistent_workers: true

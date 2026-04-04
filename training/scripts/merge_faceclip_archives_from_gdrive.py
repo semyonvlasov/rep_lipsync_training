@@ -14,6 +14,10 @@ Existing lazy imports also block re-imports of the same sample name.
 
 This means we can incrementally widen the dataset without deleting the current
 remote processed roots, while keeping one effective dataset per root.
+
+Important: the TalkVid root name itself does not filter quality tiers. The
+neutral root is `data/talkvid/processed`, and it may contain `confident`,
+`medium`, and `unconfident` lazy imports under `_lazy_imports/`.
 """
 
 import argparse
@@ -248,6 +252,13 @@ def build_existing_name_index(dataset_root: Path, import_subdir: str) -> dict[st
     return {"names": names, "stats": stats}
 
 
+def list_lazy_tiers(dataset_root: Path, import_subdir: str) -> list[str]:
+    import_root = dataset_root / import_subdir
+    if not import_root.exists():
+        return []
+    return sorted([child.name for child in import_root.iterdir() if child.is_dir()])
+
+
 def cleanup_paths(paths: list[Path]) -> None:
     for path in paths:
         if not path.exists():
@@ -272,7 +283,15 @@ def main() -> int:
     parser.add_argument("--download-dir", default="data/_imports/faceclip_merge_downloads")
     parser.add_argument("--extract-dir", default="data/_imports/faceclip_merge_extracted")
     parser.add_argument("--hdtf-root", default="data/hdtf/processed")
-    parser.add_argument("--talkvid-root", default="data/talkvid/processed_medium")
+    parser.add_argument(
+        "--talkvid-root",
+        default="data/talkvid/processed",
+        help=(
+            "TalkVid dataset root. Quality tiers are always imported under "
+            "<talkvid-root>/<import-subdir>/<tier>; the root basename itself "
+            "does not filter tiers. Default: data/talkvid/processed."
+        ),
+    )
     parser.add_argument("--import-subdir", default="_lazy_imports")
     parser.add_argument(
         "--include-tier",
@@ -299,8 +318,18 @@ def main() -> int:
     latest_state = load_latest_state(manifest_path)
     source_archives = list_source_archives(args)
     log(f"[FaceclipMerge] source_archives={len(source_archives)}")
+    log(f"[FaceclipMerge] hdtf_import_root={hdtf_root / args.import_subdir}")
+    log(f"[FaceclipMerge] talkvid_import_root={talkvid_root / args.import_subdir}")
     if include_tiers:
         log(f"[FaceclipMerge] include_tiers={sorted(include_tiers)}")
+    else:
+        log("[FaceclipMerge] include_tiers=ALL")
+        if talkvid_root.name != "processed":
+            log(
+                "[FaceclipMerge] NOTE: talkvid_root basename does not filter quality tiers; "
+                f"merge still imports every quality tier under "
+                f"{talkvid_root / args.import_subdir}/<tier>."
+            )
 
     existing_by_dataset = {
         "hdtf": build_existing_name_index(hdtf_root, args.import_subdir),
@@ -452,6 +481,8 @@ def main() -> int:
     log(f"[FaceclipMerge] merged_archives={merged_archives}")
     log(f"[FaceclipMerge] hdtf_root={hdtf_root}")
     log(f"[FaceclipMerge] talkvid_root={talkvid_root}")
+    log(f"[FaceclipMerge] hdtf_tiers={list_lazy_tiers(hdtf_root, args.import_subdir)}")
+    log(f"[FaceclipMerge] talkvid_tiers={list_lazy_tiers(talkvid_root, args.import_subdir)}")
     return 0
 
 
