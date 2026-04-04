@@ -230,6 +230,45 @@ def build_sync_alignment_record(
     return payload
 
 
+def build_failed_sync_alignment_record(
+    *,
+    n_frames: int | None = None,
+    mel_total_steps: int | None = None,
+    fps: float | None = None,
+    mel_frames_per_second: float | None = None,
+    mel_step_size: int | None = None,
+    search_guard_mel_ticks: int | None = None,
+    source: str,
+    reason: str,
+    error: str | None = None,
+    extra: dict | None = None,
+) -> dict:
+    payload = {
+        "version": SYNC_ALIGNMENT_VERSION,
+        "status": "failed",
+        "source": str(source),
+        "reason": str(reason),
+        "computed_at": _timestamp_utc(),
+    }
+    if error:
+        payload["error"] = str(error)
+    if n_frames is not None:
+        payload["n_frames_total"] = int(n_frames)
+    if mel_total_steps is not None:
+        payload["mel_total_steps"] = int(mel_total_steps)
+    if fps is not None:
+        payload["fps"] = float(fps)
+    if mel_frames_per_second is not None:
+        payload["mel_frames_per_second"] = float(mel_frames_per_second)
+    if mel_step_size is not None:
+        payload["mel_step_size"] = int(mel_step_size)
+    if search_guard_mel_ticks is not None:
+        payload["search_guard_mel_ticks"] = int(search_guard_mel_ticks)
+    if extra:
+        payload.update(extra)
+    return payload
+
+
 def upsert_sync_alignment(
     meta: dict,
     *,
@@ -267,6 +306,36 @@ def upsert_sync_alignment(
         start_gap_multiple=start_gap_multiple,
         best_mean_loss=best_mean_loss,
         zero_mean_loss=zero_mean_loss,
+        extra=extra,
+    )
+    return updated
+
+
+def upsert_failed_sync_alignment(
+    meta: dict,
+    *,
+    n_frames: int | None = None,
+    mel_total_steps: int | None = None,
+    fps: float | None = None,
+    mel_frames_per_second: float | None = None,
+    mel_step_size: int | None = None,
+    search_guard_mel_ticks: int | None = None,
+    source: str,
+    reason: str,
+    error: str | None = None,
+    extra: dict | None = None,
+) -> dict:
+    updated = dict(meta or {})
+    updated["sync_alignment"] = build_failed_sync_alignment_record(
+        n_frames=n_frames,
+        mel_total_steps=mel_total_steps,
+        fps=fps,
+        mel_frames_per_second=mel_frames_per_second,
+        mel_step_size=mel_step_size,
+        search_guard_mel_ticks=search_guard_mel_ticks,
+        source=source,
+        reason=reason,
+        error=error,
         extra=extra,
     )
     return updated
@@ -702,6 +771,38 @@ def write_sync_alignment_to_meta_path(
         start_gap_multiple=start_gap_multiple,
         best_mean_loss=best_mean_loss,
         zero_mean_loss=zero_mean_loss,
+        extra=extra,
+    )
+    _atomic_write_json(meta_path, updated)
+    return updated
+
+
+def write_failed_sync_alignment_to_meta_path(
+    meta_path: str,
+    meta: dict,
+    *,
+    n_frames: int | None = None,
+    mel_total_steps: int | None = None,
+    fps: float | None = None,
+    mel_frames_per_second: float | None = None,
+    mel_step_size: int | None = None,
+    search_guard_mel_ticks: int | None = None,
+    source: str,
+    reason: str,
+    error: str | None = None,
+    extra: dict | None = None,
+) -> dict:
+    updated = upsert_failed_sync_alignment(
+        meta,
+        n_frames=n_frames,
+        mel_total_steps=mel_total_steps,
+        fps=fps,
+        mel_frames_per_second=mel_frames_per_second,
+        mel_step_size=mel_step_size,
+        search_guard_mel_ticks=search_guard_mel_ticks,
+        source=source,
+        reason=reason,
+        error=error,
         extra=extra,
     )
     _atomic_write_json(meta_path, updated)

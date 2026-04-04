@@ -52,8 +52,8 @@ from .sync_alignment import (
     build_shifted_frame_aligned_mels,
     compute_sync_alignment_from_faceclip,
     load_sync_alignment,
-    upsert_sync_alignment,
     write_sync_alignment_to_meta_path,
+    write_failed_sync_alignment_to_meta_path,
 )
 
 
@@ -764,7 +764,15 @@ class LipSyncDataset(Dataset):
             if not entry or entry.get("type") != "lazy":
                 continue
             meta = self._load_meta(entry)
+            sync_alignment = meta.get("sync_alignment") if isinstance(meta, dict) else None
             if load_sync_alignment(meta) is None:
+                if (
+                    self.skip_bad_samples
+                    and isinstance(sync_alignment, dict)
+                    and sync_alignment.get("status") == "failed"
+                ):
+                    entry["_frame_count"] = 0
+                    continue
                 missing.append(entry)
 
         if not missing:
@@ -792,6 +800,14 @@ class LipSyncDataset(Dataset):
         meta = self._load_meta(entry)
         if load_sync_alignment(meta) is not None:
             return meta
+        sync_alignment = meta.get("sync_alignment") if isinstance(meta, dict) else None
+        if (
+            self.skip_bad_samples
+            and isinstance(sync_alignment, dict)
+            and sync_alignment.get("status") == "failed"
+        ):
+            entry["_frame_count"] = 0
+            return meta
 
         if entry.get("type") != "lazy":
             return meta
@@ -810,26 +826,45 @@ class LipSyncDataset(Dataset):
             mel = np.load(entry["mel_path"])
             source_fps = float(meta.get("fps", self.fps) or self.fps)
             frames = self._normalize_frames_to_target_fps(frames, source_fps)
-
-            result = compute_sync_alignment_from_faceclip(
-                frames=frames,
-                mel=mel,
-                fps=self.fps,
-                mel_frames_per_second=self.mel_frames_per_second,
-                mel_step_size=self.mel_step_size,
-                syncnet_T=self.syncnet_T,
-                checkpoint_path=self.sync_alignment_syncnet_checkpoint,
-                device=self.sync_alignment_device,
-                search_mel_ticks=self.sync_alignment_search_mel_ticks,
-                search_guard_mel_ticks=self.sync_alignment_guard_mel_ticks,
-                samples=self.sync_alignment_samples,
-                sample_density_per_5s=self.sync_alignment_sample_density_per_5s,
-                seed=self.sync_alignment_seed,
-                min_start_gap_ratio=self.sync_alignment_min_start_gap_ratio,
-                start_gap_multiple=self.sync_alignment_start_gap_multiple,
-                batch_size=self.sync_alignment_batch_size,
-                outlier_trim_ratio=self.sync_alignment_outlier_trim_ratio,
-            )
+            try:
+                result = compute_sync_alignment_from_faceclip(
+                    frames=frames,
+                    mel=mel,
+                    fps=self.fps,
+                    mel_frames_per_second=self.mel_frames_per_second,
+                    mel_step_size=self.mel_step_size,
+                    syncnet_T=self.syncnet_T,
+                    checkpoint_path=self.sync_alignment_syncnet_checkpoint,
+                    device=self.sync_alignment_device,
+                    search_mel_ticks=self.sync_alignment_search_mel_ticks,
+                    search_guard_mel_ticks=self.sync_alignment_guard_mel_ticks,
+                    samples=self.sync_alignment_samples,
+                    sample_density_per_5s=self.sync_alignment_sample_density_per_5s,
+                    seed=self.sync_alignment_seed,
+                    min_start_gap_ratio=self.sync_alignment_min_start_gap_ratio,
+                    start_gap_multiple=self.sync_alignment_start_gap_multiple,
+                    batch_size=self.sync_alignment_batch_size,
+                    outlier_trim_ratio=self.sync_alignment_outlier_trim_ratio,
+                )
+            except Exception as exc:
+                if not self.skip_bad_samples:
+                    raise
+                failed_meta = write_failed_sync_alignment_to_meta_path(
+                    entry["meta_path"],
+                    meta,
+                    n_frames=len(frames),
+                    mel_total_steps=int(mel.shape[1]),
+                    fps=self.fps,
+                    mel_frames_per_second=self.mel_frames_per_second,
+                    mel_step_size=self.mel_step_size,
+                    search_guard_mel_ticks=self.sync_alignment_guard_mel_ticks,
+                    source="computed_on_demand",
+                    reason="compute_failed",
+                    error=str(exc),
+                )
+                entry["meta"] = failed_meta
+                entry["_frame_count"] = 0
+                return failed_meta
 
             extra = {
                 "compute_device": result["device"],
@@ -1010,6 +1045,17 @@ class LipSyncDataset(Dataset):
         frames = np.load(entry["frames_path"], mmap_mode="r")
         mel = np.load(entry["mel_path"])
         meta = self._load_meta(entry)
+        sync_alignment = meta.get("sync_alignment") if isinstance(meta, dict) else None
+        if (
+            self.sync_alignment_enabled
+            and self.skip_bad_samples
+            and isinstance(sync_alignment, dict)
+            and sync_alignment.get("status") == "failed"
+        ):
+            reason = sync_alignment.get("reason", "failed")
+            error = sync_alignment.get("error", "")
+            detail = f"{reason}: {error}".strip(": ")
+            raise RuntimeError(f"sync alignment failed for {entry['name']} ({detail})")
 
         source_fps = float(meta.get("fps", self.fps) or self.fps)
         frames = self._normalize_frames_to_target_fps(frames, source_fps)
