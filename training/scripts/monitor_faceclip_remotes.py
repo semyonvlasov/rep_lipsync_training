@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import shlex
 import subprocess
 import time
@@ -23,6 +25,15 @@ def timestamp() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def compact_timestamp(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    match = re.search(r"\b(\d{2}:\d{2}:\d{2})\b", str(raw))
+    if match:
+        return match.group(1)
+    return None
+
+
 def load_json(path: Path, default):
     if not path.exists():
         return default
@@ -36,7 +47,7 @@ def load_json(path: Path, default):
 
 def write_json(path: Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     with open(tmp, "w") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     tmp.replace(path)
@@ -44,7 +55,7 @@ def write_json(path: Path, payload) -> None:
 
 def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     tmp.write_text(text)
     tmp.replace(path)
 
@@ -56,7 +67,12 @@ def load_registry(path: Path) -> list[dict]:
 
 def upsert_registry_entry(registry: list[dict], entry: dict) -> list[dict]:
     entry_id = entry["id"]
-    updated = [item for item in registry if item.get("id") != entry_id]
+    entry_name = str(entry.get("name", ""))
+    updated = [
+        item
+        for item in registry
+        if item.get("id") != entry_id and str(item.get("name", "")) != entry_name
+    ]
     updated.append(entry)
     updated.sort(key=lambda item: (str(item.get("name", "")), str(item.get("remote", "")), int(item.get("port", 0))))
     return updated
@@ -155,15 +171,28 @@ def render_status_text(payload: dict) -> str:
 
 def render_line(entry: dict, payload: dict | None, cache_entry: dict | None) -> str:
     label = entry_label(entry)
+    seen_ts = compact_timestamp((cache_entry or {}).get("last_seen_ts")) if isinstance(cache_entry, dict) else None
     if payload is not None:
         status_text = render_status_text(payload)
+        if seen_ts:
+            return f"{label} | {status_text} @ {seen_ts}"
         return f"{label} | {status_text}"
 
     if isinstance(cache_entry, dict) and cache_entry.get("status_text"):
-        last_seen = cache_entry.get("last_seen_ts")
-        suffix = f" @ {last_seen}" if last_seen else ""
-        return f"{label} | no response, last status: {cache_entry['status_text']}{suffix}"
+        if seen_ts:
+            return f"{label} | no response, last status: {cache_entry['status_text']} @ {seen_ts}"
+        return f"{label} | no response, last status: {cache_entry['status_text']}"
     return f"{label} | no response"
+
+
+def render_cached_line(entry: dict, cache_entry: dict | None) -> str:
+    label = entry_label(entry)
+    if isinstance(cache_entry, dict) and cache_entry.get("status_text"):
+        seen_ts = compact_timestamp(cache_entry.get("last_seen_ts"))
+        if seen_ts:
+            return f"{label} | {cache_entry['status_text']} @ {seen_ts}"
+        return f"{label} | {cache_entry['status_text']}"
+    return f"{label} | pending refresh"
 
 
 def do_register(args) -> int:
@@ -211,6 +240,21 @@ def do_refresh(args) -> int:
 
     for entry in registry:
         cache_key = str(entry["id"])
+        lines.append(render_cached_line(entry, next_cache.get(cache_key)))
+
+    if not registry:
+        lines = ["no registered faceclip remotes"]
+        write_json(cache_path, next_cache)
+        write_text(output_path, "\n".join(lines) + "\n")
+        if args.print_output:
+            print("\n".join(lines))
+        return 0
+
+    write_json(cache_path, next_cache)
+    write_text(output_path, "\n".join(lines) + "\n")
+
+    for idx, entry in enumerate(registry):
+        cache_key = str(entry["id"])
         payload = None
         try:
             payload = fetch_remote_status(entry, args.ssh_timeout)
@@ -221,17 +265,26 @@ def do_refresh(args) -> int:
             }
         except Exception:
             payload = None
-        lines.append(render_line(entry, payload, next_cache.get(cache_key)))
-
-    if not lines:
-        lines = ["no registered faceclip remotes"]
-
-    write_json(cache_path, next_cache)
-    write_text(output_path, "\n".join(lines) + "\n")
+        lines[idx] = render_line(entry, payload, next_cache.get(cache_key))
+        write_json(cache_path, next_cache)
+        write_text(output_path, "\n".join(lines) + "\n")
 
     if args.print_output:
         print("\n".join(lines))
     return 0
+
+
+def do_serve(args) -> int:
+    while True:
+        refresh_args = argparse.Namespace(
+            registry=args.registry,
+            cache=args.cache,
+            output=args.output,
+            ssh_timeout=args.ssh_timeout,
+            print_output=False,
+        )
+        do_refresh(refresh_args)
+        time.sleep(args.interval)
 
 
 def main() -> int:
@@ -261,6 +314,13 @@ def main() -> int:
     refresh.add_argument("--ssh-timeout", type=int, default=8)
     refresh.add_argument("--print-output", action="store_true")
 
+    serve = subparsers.add_parser("serve")
+    serve.add_argument("--registry", required=True)
+    serve.add_argument("--cache", required=True)
+    serve.add_argument("--output", required=True)
+    serve.add_argument("--ssh-timeout", type=int, default=8)
+    serve.add_argument("--interval", type=int, default=10)
+
     args = parser.parse_args()
     if args.cmd == "register":
         return do_register(args)
@@ -268,6 +328,8 @@ def main() -> int:
         return do_unregister(args)
     if args.cmd == "refresh":
         return do_refresh(args)
+    if args.cmd == "serve":
+        return do_serve(args)
     raise ValueError(f"unsupported cmd: {args.cmd}")
 
 

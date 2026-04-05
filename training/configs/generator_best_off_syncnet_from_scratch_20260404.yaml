@@ -34,14 +34,14 @@ generator:
     l1: 1.0
     perceptual: 0.0
     sync: 0.01
-    sync_initial: 0.01
+    sync_initial: 0.0
     sync_warmup_epochs: 0
-    sync_official_schedule: false
+    sync_official_schedule: true
     sync_official_threshold: 0.75
     sync_adaptive_schedule: false
     sync_adaptive_start: 4.5
     sync_adaptive_full: 2.6
-    sync_eval_monitor_only: true
+    sync_eval_monitor_only: false
     gan_mode: official_hq
     gan: 0.0
     temporal: 0.0
@@ -73,4 +73,17 @@ training:
   save_every: 1
   latest_save_interval_steps: 3000
   sample_every: 1
-  output_dir: output/generator_medium_x96_b32_official_syncnet_continue_from_ablation_winner_20260328
+  output_dir: output/generator_medium_x96_b32_best_off_syncnet_from_scratch_20260404
+
+benchmark:
+  enabled: true
+  audio: output/benchmark_samples/short_4s.mp3
+  faces:
+    - output/benchmark_samples/portrait_avatar.mp4
+    - output/benchmark_samples/portrait_rama.mp4
+  device: cuda
+  detector_device: cuda
+  batch_size: 16
+  face_det_batch_size: 4
+  latest_output_dirname: generator_latest_bench
+  best_output_dirname: generator_best_off_eval_bench

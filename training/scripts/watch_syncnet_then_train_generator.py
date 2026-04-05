@@ -103,11 +103,8 @@ def derive_generator_lazy_cache_root(sync_cfg, syncnet_output_dir, explicit_lazy
     data_cfg = sync_cfg.get("data", {})
     sync_lazy = data_cfg.get("lazy_cache_root")
     if sync_lazy:
-        sync_lazy = str(sync_lazy)
-        if "syncnet" in sync_lazy:
-            return sync_lazy.replace("syncnet", "generator")
-    sync_run_name = Path(syncnet_output_dir).name
-    return f"data/_lazy_cache_generator_from_{sync_run_name}"
+        return str(sync_lazy)
+    return None
 
 
 def derive_generator_val_speaker_list(template_config_path, explicit_val_speaker_list):

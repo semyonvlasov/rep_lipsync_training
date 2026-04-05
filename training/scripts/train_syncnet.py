@@ -178,6 +178,28 @@ def load_official_syncnet_model(checkpoint_path, device):
     return model
 
 
+def load_syncnet_init_weights(checkpoint_path, model, device):
+    ck = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if isinstance(ck, dict):
+        if "model" in ck:
+            state_dict = ck["model"]
+            kind = "syncnet_checkpoint"
+        elif "state_dict" in ck:
+            state_dict = ck["state_dict"]
+            kind = "state_dict_checkpoint"
+        else:
+            state_dict = ck
+            kind = "raw_state_dict"
+    else:
+        raise RuntimeError(f"Unsupported SyncNet init checkpoint format: {checkpoint_path}")
+    model.load_state_dict(state_dict)
+    return {
+        "kind": kind,
+        "epoch": ck.get("epoch") if isinstance(ck, dict) else None,
+        "global_step": ck.get("global_step") if isinstance(ck, dict) else None,
+    }
+
+
 def capture_rng_state(device):
     state = {
         "python": random.getstate(),
@@ -578,9 +600,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--resume", default=None, help="Resume from checkpoint")
+    parser.add_argument("--init-model", default=None, help="Initialize model weights from checkpoint without resuming optimizer/state")
     parser.add_argument("--speaker-list", default=None, help="Optional newline-separated list of speaker dirs to include")
     parser.add_argument("--val-speaker-list", default=None, help="Optional newline-separated list of speaker dirs for eval")
     args = parser.parse_args()
+
+    if args.resume and args.init_model:
+        raise ValueError("--resume and --init-model are mutually exclusive")
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
@@ -675,6 +701,13 @@ def main():
 
     # Model
     model = build_syncnet_model(model_type, cfg["syncnet"]["T"], device)
+    if args.init_model:
+        init_info = load_syncnet_init_weights(args.init_model, model, device)
+        log(
+            "Initialized SyncNet weights from "
+            f"{args.init_model} (kind={init_info['kind']}, "
+            f"epoch={init_info['epoch']}, global_step={init_info['global_step']})"
+        )
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["syncnet"]["lr"])
     use_amp = cfg["training"].get("mixed_precision", False) and device == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp) if device == "cuda" else None

@@ -513,6 +513,36 @@ Restart the loop manually with the current cookie file:
 caffeinate -dimsu /bin/zsh training/run_local_talkvid_batch_cycle.sh
 ```
 
+## Background Launch Recipe
+
+For the local TalkVid redownload-from-`batch_0034` flow, use exactly one background recipe and do not improvise with `setsid`, foreground probes, or ad-hoc wrapper chains.
+
+Canonical launcher:
+
+```bash
+/bin/zsh /Users/semenvlasov/Documents/repos/lipsync_test/training/start_local_talkvid_redownload_from_batch_0034_bg.sh
+```
+
+This helper wraps the known-good pattern already used by successful long-running jobs:
+
+```bash
+nohup caffeinate -dimsu /bin/zsh "$RUN_SCRIPT" >> "$LAUNCHER_LOG" 2>&1 &
+```
+
+Operational rule:
+- Start the redownload only through `training/start_local_talkvid_redownload_from_batch_0034_bg.sh`
+- Do not launch `run_local_talkvid_redownload_from_batch_0034.sh` directly in background
+- Do not use `setsid`
+- Do not use foreground "test runs" followed by manual promotion to background
+
+Artifacts:
+- launcher log:
+  `/Users/semenvlasov/Documents/repos/lipsync_test/training/output/talkvid_local_redownload_from_batch_0034_cycle/launcher.log`
+- cycle log:
+  `/Users/semenvlasov/Documents/repos/lipsync_test/training/output/talkvid_local_redownload_from_batch_0034_cycle/cycle.log`
+- launcher pid:
+  `/Users/semenvlasov/Documents/repos/lipsync_test/training/output/talkvid_local_redownload_from_batch_0034_cycle/launcher.pid`
+
 If cookies need to be rebuilt from a copied Safari export:
 
 ```bash

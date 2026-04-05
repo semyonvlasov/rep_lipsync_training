@@ -16,8 +16,10 @@ Usage:
 
 import argparse
 import os
+import subprocess
 import sys
 import time
+from collections import deque
 from contextlib import nullcontext
 import yaml
 import torch
@@ -120,6 +122,49 @@ def compute_remaining_eta(seconds_elapsed, units_done, units_total):
     return (seconds_elapsed / units_done) * remaining_units
 
 
+class ProgressEtaTracker:
+    """Estimate remaining time from the last N logged progress points."""
+
+    def __init__(self, max_points=5):
+        self.points = deque(maxlen=max_points)
+
+    def add(self, units_done, timestamp):
+        if units_done <= 0:
+            return
+        self.points.append((float(units_done), float(timestamp)))
+
+    def estimate_remaining(self, units_total, fallback=None):
+        if len(self.points) >= 2:
+            start_units, start_ts = self.points[0]
+            end_units, end_ts = self.points[-1]
+            delta_units = end_units - start_units
+            delta_ts = end_ts - start_ts
+            if delta_units > 0 and delta_ts > 0:
+                remaining_units = max(0.0, float(units_total) - end_units)
+                return (remaining_units / delta_units) * delta_ts
+        return fallback
+
+
+def better_official_eval(
+    candidate_sync,
+    candidate_l1,
+    candidate_step,
+    best_sync,
+    best_l1,
+    best_step,
+    eps=1.0e-8,
+):
+    if candidate_sync < best_sync - eps:
+        return True
+    if abs(candidate_sync - best_sync) <= eps:
+        if candidate_l1 < best_l1 - eps:
+            return True
+        if abs(candidate_l1 - best_l1) <= eps:
+            if best_step is None or candidate_step > best_step:
+                return True
+    return False
+
+
 def flatten_temporal(x):
     """(B, C, T, H, W) -> (B*T, C, H, W); passthrough for 4D tensors."""
     if x.dim() == 5:
@@ -185,6 +230,25 @@ def load_syncnet_teacher(checkpoint_path, device, syncnet_T):
     return model, kind, epoch
 
 
+def load_generator_init_weights(checkpoint_path, generator, device):
+    ck = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if isinstance(ck, dict) and "generator" in ck:
+        generator.load_state_dict(ck["generator"])
+        return {
+            "kind": "generator_checkpoint",
+            "epoch": ck.get("epoch"),
+            "global_step": ck.get("global_step"),
+        }
+    if isinstance(ck, dict):
+        generator.load_state_dict(ck)
+        return {
+            "kind": "state_dict",
+            "epoch": None,
+            "global_step": None,
+        }
+    raise RuntimeError(f"Unsupported generator init checkpoint format: {checkpoint_path}")
+
+
 def sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, face_sequences):
     sync_face = prepare_syncnet_visual(face_sequences)
     if syncnet_kind in {"official", "mirror"}:
@@ -230,6 +294,9 @@ def build_generator_checkpoint(
     discriminator=None,
     d_opt=None,
     g_scheduler=None,
+    best_off_eval_sync=None,
+    best_off_eval_l1=None,
+    best_off_eval_step=None,
 ):
     ck = {
         "epoch": int(epoch),
@@ -246,6 +313,12 @@ def build_generator_checkpoint(
         ck["d_optimizer"] = d_opt.state_dict()
     if g_scheduler is not None:
         ck["g_scheduler"] = g_scheduler.state_dict()
+    if best_off_eval_sync is not None:
+        ck["best_off_eval_sync"] = float(best_off_eval_sync)
+    if best_off_eval_l1 is not None:
+        ck["best_off_eval_l1"] = float(best_off_eval_l1)
+    if best_off_eval_step is not None:
+        ck["best_off_eval_step"] = int(best_off_eval_step)
     return ck
 
 
@@ -261,6 +334,92 @@ def load_allowlist(path):
         return None
     with open(path) as f:
         return [line.strip() for line in f if line.strip()]
+
+
+def resolve_training_path(raw_path):
+    if not raw_path:
+        return None
+    if os.path.isabs(raw_path):
+        return raw_path
+    return os.path.join(TRAINING_ROOT, raw_path)
+
+
+def build_generator_benchmark_cfg(cfg):
+    bench_cfg = cfg.get("benchmark") or {}
+    if not bench_cfg.get("enabled", False):
+        return None
+
+    faces = [resolve_training_path(path) for path in bench_cfg.get("faces", []) if path]
+    audio = resolve_training_path(bench_cfg.get("audio"))
+    if not faces or not audio:
+        return {
+            "enabled": False,
+            "reason": "missing face/audio benchmark sample paths in config",
+        }
+
+    missing = [path for path in [audio, *faces] if not os.path.exists(path)]
+    if missing:
+        return {
+            "enabled": False,
+            "reason": f"missing benchmark sample files: {missing}",
+        }
+
+    return {
+        "enabled": True,
+        "faces": faces,
+        "audio": audio,
+        "device": bench_cfg.get("device", "cuda"),
+        "detector_device": bench_cfg.get("detector_device", "cuda"),
+        "batch_size": int(bench_cfg.get("batch_size", 16)),
+        "face_det_batch_size": int(bench_cfg.get("face_det_batch_size", 4)),
+        "latest_output_dirname": bench_cfg.get("latest_output_dirname", "generator_latest_bench"),
+        "best_output_dirname": bench_cfg.get("best_output_dirname", "generator_best_off_eval_bench"),
+    }
+
+
+def run_generator_checkpoint_benchmark(checkpoint_path, benchmark_output_dir, benchmark_cfg, label):
+    publish_script = os.path.join(TRAINING_ROOT, "scripts", "publish_checkpoint_benchmark.py")
+    os.makedirs(benchmark_output_dir, exist_ok=True)
+    benchmark_log_path = os.path.join(benchmark_output_dir, "benchmark.log")
+    cmd = [
+        sys.executable,
+        publish_script,
+        "--checkpoint",
+        checkpoint_path,
+        "--skip-upload",
+        "--audio",
+        benchmark_cfg["audio"],
+        "--output-dir",
+        benchmark_output_dir,
+        "--device",
+        benchmark_cfg["device"],
+        "--detector-device",
+        benchmark_cfg["detector_device"],
+        "--batch-size",
+        str(benchmark_cfg["batch_size"]),
+        "--face-det-batch-size",
+        str(benchmark_cfg["face_det_batch_size"]),
+    ]
+    for face_path in benchmark_cfg["faces"]:
+        cmd.extend(["--face", face_path])
+
+    log(f"  Benchmarking {label} -> {benchmark_output_dir}")
+    with open(benchmark_log_path, "a", encoding="utf-8") as handle:
+        handle.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S %Z')} {label} ===\n")
+        proc = subprocess.run(
+            cmd,
+            cwd=TRAINING_ROOT,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    if proc.returncode != 0:
+        log(
+            f"  Benchmark failed for {label} (rc={proc.returncode}) -> {benchmark_log_path}"
+        )
+        return False
+    log(f"  Benchmark refreshed for {label} -> {benchmark_output_dir}")
+    return True
 
 
 def build_sync_alignment_kwargs(cfg):
@@ -363,9 +522,13 @@ def main():
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--syncnet", required=True, help="Path to trained SyncNet checkpoint")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--init-generator", default=None, help="Initialize generator weights from checkpoint but start training from epoch 0 with fresh optimizer state")
     parser.add_argument("--speaker-list", default=None, help="Optional newline-separated list of speaker dirs to include")
     parser.add_argument("--val-speaker-list", default=None, help="Optional newline-separated list of held-out dirs for official-style sync evaluation")
     args = parser.parse_args()
+
+    if args.resume and args.init_generator:
+        raise SystemExit("--resume and --init-generator are mutually exclusive")
 
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
@@ -375,6 +538,19 @@ def main():
     sample_dir = os.path.join(output_dir, "samples")
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(sample_dir, exist_ok=True)
+    benchmark_cfg = build_generator_benchmark_cfg(cfg)
+    if benchmark_cfg is None:
+        log("Benchmark-on-eval: disabled")
+    elif not benchmark_cfg.get("enabled", False):
+        log(f"Benchmark-on-eval: disabled ({benchmark_cfg['reason']})")
+        benchmark_cfg = None
+    else:
+        log(
+            "Benchmark-on-eval: enabled "
+            f"(faces={len(benchmark_cfg['faces'])}, audio={benchmark_cfg['audio']}, "
+            f"latest_dir={benchmark_cfg['latest_output_dirname']}, "
+            f"best_dir={benchmark_cfg['best_output_dirname']})"
+        )
 
     if device == "cuda":
         allow_tf32 = cfg["training"].get("allow_tf32", True)
@@ -420,6 +596,12 @@ def main():
     ).to(device)
     param_count = sum(p.numel() for p in generator.parameters()) / 1e6
     log(f"Generator: {param_count:.1f}M params")
+    if args.init_generator:
+        init_meta = load_generator_init_weights(args.init_generator, generator, device)
+        log(
+            f"Initialized generator weights from {args.init_generator} "
+            f"(kind={init_meta['kind']}, epoch={init_meta['epoch']}, global_step={init_meta['global_step']})"
+        )
 
     discriminator = None
     if loss_cfg.get("gan", 0) > 0:
@@ -495,6 +677,9 @@ def main():
     resume_kind = "fresh"
     restored_global_step = None
     restored_effective_sync_wt = None
+    best_off_eval_sync = float("inf")
+    best_off_eval_l1 = float("inf")
+    best_off_eval_step = None
     if args.resume:
         ck = torch.load(args.resume, map_location=device, weights_only=False)
         generator.load_state_dict(ck["generator"])
@@ -507,6 +692,12 @@ def main():
         resume_kind = str(ck.get("checkpoint_kind", "epoch"))
         restored_global_step = ck.get("global_step")
         restored_effective_sync_wt = ck.get("effective_sync_wt")
+        if ck.get("best_off_eval_sync") is not None:
+            best_off_eval_sync = float(ck["best_off_eval_sync"])
+        if ck.get("best_off_eval_l1") is not None:
+            best_off_eval_l1 = float(ck["best_off_eval_l1"])
+        if ck.get("best_off_eval_step") is not None:
+            best_off_eval_step = int(ck["best_off_eval_step"])
         if resume_kind == "step":
             start_epoch = int(ck["epoch"])
             resume_batches_in_epoch = int(ck.get("batches_processed_in_epoch", 0))
@@ -539,6 +730,7 @@ def main():
     sync_adaptive_full = float(loss_cfg.get("sync_adaptive_full", 2.6))
     latest_save_interval_steps = int(cfg["training"].get("latest_save_interval_steps", 0) or 0)
     latest_ckpt_path = os.path.join(output_dir, "generator_latest.pth")
+    best_off_eval_ckpt_path = os.path.join(output_dir, "generator_best_off_eval.pth")
     if official_sync_schedule:
         log(
             "Official-style sync schedule: "
@@ -563,6 +755,7 @@ def main():
             "Latest checkpoint cadence: "
             f"every {latest_save_interval_steps} global steps -> {latest_ckpt_path}"
         )
+        log(f"Best official-like checkpoint path: {best_off_eval_ckpt_path}")
     if (official_sync_schedule or adaptive_sync_schedule or sync_eval_monitor_only) and val_loader is None:
         log(
             "WARNING: sync schedule is enabled but no --val-speaker-list was provided; "
@@ -571,6 +764,7 @@ def main():
 
     sync_warmup_epochs = loss_cfg.get("sync_warmup_epochs", 10)
     training_t0 = time.time()
+    full_eta_tracker = ProgressEtaTracker(max_points=5)
     for epoch in range(start_epoch, cfg["generator"]["epochs"]):
         generator.train()
         if discriminator:
@@ -582,12 +776,19 @@ def main():
         batches_processed = 0
         ema100 = {key: None for key in totals}
         epoch_resume_batches = resume_batches_in_epoch if epoch == start_epoch else 0
+        epoch_eta_tracker = ProgressEtaTracker(max_points=5)
         if epoch_resume_batches > 0:
-            log(f"Skipping {epoch_resume_batches} already-processed batches in epoch {epoch}")
+            log(
+                f"Fast resuming epoch {epoch} from logical batch offset "
+                f"{epoch_resume_batches}/{epoch_total_batches}"
+            )
+            log(
+                "  Dataset sampling is stochastic, so resume skips DataLoader rewind "
+                "and continues from fresh draws while preserving counters"
+            )
 
         for batch_idx, (face_input, indiv_mels, mel, gt) in enumerate(loader):
-            if batch_idx < epoch_resume_batches:
-                continue
+            logical_batch_idx = epoch_resume_batches + batch_idx
 
             non_blocking = device == "cuda"
             face_input = face_input.to(device, non_blocking=non_blocking)
@@ -726,17 +927,31 @@ def main():
             for key, value in current_metrics.items():
                 ema100[key] = update_ema(ema100[key], value, 100)
 
-            if batch_idx % 60 == 0:
-                elapsed_epoch = time.time() - t0
-                epoch_eta = compute_remaining_eta(
+            benchmark_latest_due = False
+            benchmark_best_due = False
+
+            if logical_batch_idx % 60 == 0:
+                now_ts = time.time()
+                elapsed_epoch = now_ts - t0
+                epoch_fallback_eta = compute_remaining_eta(
                     elapsed_epoch,
                     batches_processed,
                     max(1, epoch_total_batches - epoch_resume_batches),
                 )
-                elapsed_total = time.time() - training_t0
+                elapsed_total = now_ts - training_t0
                 completed_total = (epoch * epoch_total_batches) + effective_epoch_batches
-                full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_planned)
-                log(f"  E{epoch} [{batch_idx}/{len(loader)}] "
+                full_fallback_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_planned)
+                epoch_eta_tracker.add(batches_processed, now_ts)
+                full_eta_tracker.add(completed_total, now_ts)
+                epoch_eta = epoch_eta_tracker.estimate_remaining(
+                    max(1, epoch_total_batches - epoch_resume_batches),
+                    fallback=epoch_fallback_eta,
+                )
+                full_eta = full_eta_tracker.estimate_remaining(
+                    total_batches_planned,
+                    fallback=full_fallback_eta,
+                )
+                log(f"  E{epoch} [{logical_batch_idx}/{epoch_total_batches}] "
                     f"l1={l1.item():.4f} perc={perc.item():.4f} "
                     f"sync={sync_loss.item():.4f} reward={sync_reward.item():.4f} "
                     f"gan_g={gan_g_loss.item():.4f} "
@@ -768,6 +983,7 @@ def main():
                     use_amp,
                 )
                 if avg_sync is not None:
+                    benchmark_latest_due = benchmark_cfg is not None
                     log(
                         f"  Eval step {global_step}: val_sync={avg_sync:.4f} "
                         f"val_l1={avg_recon:.4f} active_sync_wt={effective_sync_wt:.4f}"
@@ -794,8 +1010,48 @@ def main():
                                 f"(val_sync={avg_sync:.4f}, start={sync_adaptive_start:.4f}, "
                                 f"full={sync_adaptive_full:.4f})"
                             )
+                    if better_official_eval(
+                        candidate_sync=avg_sync,
+                        candidate_l1=avg_recon,
+                        candidate_step=global_step,
+                        best_sync=best_off_eval_sync,
+                        best_l1=best_off_eval_l1,
+                        best_step=best_off_eval_step,
+                    ):
+                        best_off_eval_sync = float(avg_sync)
+                        best_off_eval_l1 = float(avg_recon)
+                        best_off_eval_step = int(global_step)
+                        save_generator_checkpoint(
+                            best_off_eval_ckpt_path,
+                            epoch=epoch,
+                            global_step=global_step,
+                            batches_processed_in_epoch=effective_epoch_batches,
+                            checkpoint_kind="step",
+                            effective_sync_wt=effective_sync_wt,
+                            generator=generator,
+                            g_opt=g_opt,
+                            cfg=cfg,
+                            discriminator=discriminator,
+                            d_opt=d_opt,
+                            g_scheduler=g_scheduler,
+                            best_off_eval_sync=best_off_eval_sync,
+                            best_off_eval_l1=best_off_eval_l1,
+                            best_off_eval_step=best_off_eval_step,
+                        )
+                        log(
+                            "  New best official-like eval: "
+                            f"val_sync={best_off_eval_sync:.4f} "
+                            f"val_l1={best_off_eval_l1:.4f} "
+                            f"at step {best_off_eval_step} -> {best_off_eval_ckpt_path}"
+                        )
+                        benchmark_best_due = benchmark_cfg is not None
 
-            if latest_save_interval_steps > 0 and global_step % latest_save_interval_steps == 0:
+            latest_checkpoint_due = (
+                (latest_save_interval_steps > 0 and global_step % latest_save_interval_steps == 0)
+                or benchmark_latest_due
+            )
+            latest_checkpoint_saved = False
+            if latest_checkpoint_due:
                 save_generator_checkpoint(
                     latest_ckpt_path,
                     epoch=epoch,
@@ -809,10 +1065,34 @@ def main():
                     discriminator=discriminator,
                     d_opt=d_opt,
                     g_scheduler=g_scheduler,
+                    best_off_eval_sync=best_off_eval_sync if best_off_eval_step is not None else None,
+                    best_off_eval_l1=best_off_eval_l1 if best_off_eval_step is not None else None,
+                    best_off_eval_step=best_off_eval_step,
+                )
+                latest_checkpoint_saved = True
+                if benchmark_latest_due:
+                    run_generator_checkpoint_benchmark(
+                        latest_ckpt_path,
+                        os.path.join(output_dir, benchmark_cfg["latest_output_dirname"]),
+                        benchmark_cfg,
+                        label=f"latest step {global_step}",
+                    )
+            elif benchmark_latest_due and not latest_checkpoint_saved:
+                log(
+                    "  Benchmark skipped for latest because no fresh generator_latest.pth "
+                    f"was saved at eval step {global_step}"
                 )
 
-            if max_batches_per_epoch and effective_epoch_batches >= max_batches_per_epoch:
-                log(f"  Reached max_batches_per_epoch={max_batches_per_epoch}, ending epoch early")
+            if benchmark_best_due:
+                run_generator_checkpoint_benchmark(
+                    best_off_eval_ckpt_path,
+                    os.path.join(output_dir, benchmark_cfg["best_output_dirname"]),
+                    benchmark_cfg,
+                    label=f"best_off_eval step {best_off_eval_step}",
+                )
+
+            if effective_epoch_batches >= epoch_total_batches:
+                log(f"  Reached logical end of epoch at {effective_epoch_batches}/{epoch_total_batches}")
                 break
 
         # Epoch stats
@@ -820,8 +1100,17 @@ def main():
         elapsed = time.time() - t0
         elapsed_total = time.time() - training_t0
         completed_total = ((epoch + 1) * epoch_total_batches)
-        full_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_planned)
-        next_epoch_eta = (elapsed / n) * epoch_total_batches if n > 0 else None
+        full_fallback_eta = compute_remaining_eta(elapsed_total, completed_total, total_batches_planned)
+        full_eta_tracker.add(completed_total, time.time())
+        full_eta = full_eta_tracker.estimate_remaining(total_batches_planned, fallback=full_fallback_eta)
+        if len(epoch_eta_tracker.points) >= 2:
+            start_units, start_ts = epoch_eta_tracker.points[0]
+            end_units, end_ts = epoch_eta_tracker.points[-1]
+            delta_units = end_units - start_units
+            delta_ts = end_ts - start_ts
+            next_epoch_eta = ((epoch_total_batches / delta_units) * delta_ts) if delta_units > 0 and delta_ts > 0 else None
+        else:
+            next_epoch_eta = (elapsed / n) * epoch_total_batches if n > 0 else None
         epoch_sync_active = (effective_sync_wt > 0) and epoch >= sync_warmup_epochs
         log(f"Epoch {epoch}/{cfg['generator']['epochs']}: "
             f"L1={totals['l1']/n:.4f} perc={totals['perc']/n:.4f} "
@@ -852,6 +1141,9 @@ def main():
                 discriminator=discriminator,
                 d_opt=d_opt,
                 g_scheduler=g_scheduler,
+                best_off_eval_sync=best_off_eval_sync if best_off_eval_step is not None else None,
+                best_off_eval_l1=best_off_eval_l1 if best_off_eval_step is not None else None,
+                best_off_eval_step=best_off_eval_step,
             )
             if latest_save_interval_steps > 0:
                 save_generator_checkpoint(
@@ -867,6 +1159,9 @@ def main():
                     discriminator=discriminator,
                     d_opt=d_opt,
                     g_scheduler=g_scheduler,
+                    best_off_eval_sync=best_off_eval_sync if best_off_eval_step is not None else None,
+                    best_off_eval_l1=best_off_eval_l1 if best_off_eval_step is not None else None,
+                    best_off_eval_step=best_off_eval_step,
                 )
 
         # Save sample images

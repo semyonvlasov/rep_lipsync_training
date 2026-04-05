@@ -18,6 +18,10 @@ remote processed roots, while keeping one effective dataset per root.
 Important: the TalkVid root name itself does not filter quality tiers. The
 neutral root is `data/talkvid/processed`, and it may contain `confident`,
 `medium`, and `unconfident` lazy imports under `_lazy_imports/`.
+
+By default, merge is incremental relative to `--manifest-path`: archives whose
+latest recorded stage is already merged are skipped. Use `--reload-all` only
+when you intentionally want to revisit every matching source archive.
 """
 
 import argparse
@@ -72,6 +76,27 @@ def load_latest_state(path: Path) -> dict[str, dict]:
             if archive_name:
                 latest[str(archive_name)] = obj
     return latest
+
+
+def filter_pending_archives(
+    source_archives: list[str],
+    latest_state: dict[str, dict],
+    reload_all: bool,
+) -> tuple[list[str], int]:
+    if reload_all:
+        return list(source_archives), 0
+
+    completed_stages = {"merged", "merged_cleaned"}
+    pending: list[str] = []
+    skipped_completed = 0
+    for archive_name in source_archives:
+        state = latest_state.get(archive_name, {})
+        stage = str(state.get("stage") or "")
+        if stage in completed_stages:
+            skipped_completed += 1
+            continue
+        pending.append(archive_name)
+    return pending, skipped_completed
 
 
 def load_json(path: Path) -> dict:
@@ -299,6 +324,11 @@ def main() -> int:
         default=[],
         help="Only import matching quality tiers (repeatable). Default: import all tiers.",
     )
+    parser.add_argument(
+        "--reload-all",
+        action="store_true",
+        help="Ignore merge manifest progress and revisit every matching source archive.",
+    )
     parser.add_argument("--keep-downloads", action="store_true")
     parser.add_argument("--keep-extracted", action="store_true")
     args = parser.parse_args()
@@ -316,8 +346,17 @@ def main() -> int:
     talkvid_root.mkdir(parents=True, exist_ok=True)
 
     latest_state = load_latest_state(manifest_path)
-    source_archives = list_source_archives(args)
-    log(f"[FaceclipMerge] source_archives={len(source_archives)}")
+    all_source_archives = list_source_archives(args)
+    source_archives, skipped_completed = filter_pending_archives(
+        all_source_archives,
+        latest_state,
+        reload_all=args.reload_all,
+    )
+    log(
+        f"[FaceclipMerge] source_archives_total={len(all_source_archives)} "
+        f"pending_archives={len(source_archives)} skipped_completed={skipped_completed} "
+        f"reload_all={args.reload_all}"
+    )
     log(f"[FaceclipMerge] hdtf_import_root={hdtf_root / args.import_subdir}")
     log(f"[FaceclipMerge] talkvid_import_root={talkvid_root / args.import_subdir}")
     if include_tiers:
@@ -345,9 +384,6 @@ def main() -> int:
 
     merged_archives = 0
     for archive_name in source_archives:
-        state = latest_state.get(archive_name, {})
-        if str(state.get("stage") or "") == "merged_cleaned":
-            continue
         if args.max_archives and merged_archives >= args.max_archives:
             break
 

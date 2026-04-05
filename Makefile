@@ -18,6 +18,11 @@ RCLONE_CONFIG_PATH ?= $(HOME)/.config/rclone/rclone.conf
 REMOTE_RCLONE_CONFIG ?= /root/.config/rclone/rclone.conf
 REMOTE_RCLONE_DIR ?= /root/.config/rclone
 REMOTE_RCLONE_PARENT ?= /root/.config
+REMOTE_ENSURE_TORCH_CUDA ?= 1
+REMOTE_TORCH_VERSION ?= 2.10.0
+REMOTE_TORCHVISION_VERSION ?= 0.25.0
+REMOTE_TORCHAUDIO_VERSION ?= 2.10.0
+REMOTE_TORCH_INDEX_URL ?= https://download.pytorch.org/whl/cu128
 
 SERVER_PY_REQUIREMENTS := $(TRAINING_ROOT)/requirements-server.txt
 
@@ -34,8 +39,12 @@ FACECLIP_MONITOR_DIR ?= $(TRAINING_ROOT)/output/faceclip_remote_monitor
 FACECLIP_MONITOR_REGISTRY ?= $(FACECLIP_MONITOR_DIR)/targets.json
 FACECLIP_MONITOR_CACHE ?= $(FACECLIP_MONITOR_DIR)/status_cache.json
 FACECLIP_MONITOR_OUTPUT ?= $(FACECLIP_MONITOR_DIR)/combined_status.log
+FACECLIP_MONITOR_REFRESH_PID ?= $(FACECLIP_MONITOR_DIR)/refresh.pid
+FACECLIP_MONITOR_DAEMON_PID ?= $(FACECLIP_MONITOR_DIR)/daemon.pid
+FACECLIP_MONITOR_DAEMON_LOG ?= $(FACECLIP_MONITOR_DIR)/daemon.log
 FACECLIP_MONITOR_NAME ?= $(REMOTE_NAME)
-FACECLIP_MONITOR_TIMEOUT ?= 8
+FACECLIP_MONITOR_TIMEOUT ?= 20
+FACECLIP_MONITOR_INTERVAL ?= 10
 FACECLIP_REMOTE_ARCHIVE_MANIFEST ?= training/output/raw_faceclips_x288_cycle/archive_manifest.jsonl
 FACECLIP_REMOTE_CYCLE_LOG ?= training/output/raw_faceclips_x288_cycle/cycle.log
 FACECLIP_REMOTE_CYCLE_PID ?= training/output/raw_faceclips_x288_cycle/cycle.pid
@@ -50,6 +59,7 @@ DATASET_HDTF_ROOT ?= data/hdtf/processed
 DATASET_TALKVID_ROOT ?= data/talkvid/processed
 DATASET_IMPORT_SUBDIR ?= _lazy_imports
 DATASET_INCLUDE_TIERS ?=
+DATASET_RELOAD ?= 0
 SYNCNET_TEACHER ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 OFFICIAL_SYNCNET_PATH ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 SYNCNET_RESUME ?=
@@ -104,13 +114,13 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
 	@echo "  make remote-sync-code # clone/pull the latest repo on a remote box and sync the official SyncNet checkpoint"
-	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box"
+	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box and verify torch/CUDA compatibility"
 	@echo "  make remote-rclone-config # upload local rclone.conf so the remote can access Drive"
 	@echo "  make remote-prewarm-sfd # instantiate the SFD detector once so the checkpoint is cached on the remote"
 	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
@@ -118,6 +128,8 @@ help:
 	@echo "  make remote-bootstrap # sync code, install deps, and start the remote observer"
 	@echo "  make remote-faceclip-bootstrap # prepare a remote box for raw->lazy faceclip processing (SFD + ffmpeg + rclone)"
 	@echo "  make remote-faceclip-start # launch raw->lazy faceclip processing on a remote and auto-register it in the local monitor"
+	@echo "  make faceclip-monitor-daemon-start # keep combined_status.log refreshed in the background"
+	@echo "  make faceclip-monitor-daemon-stop # stop the local faceclip monitor daemon"
 	@echo "  make faceclip-monitor-refresh # refresh the combined one-line-per-remote faceclip status snapshot"
 	@echo "  make dataset         # fetch new processed faceclip archives and merge them into lazy dataset roots"
 	@echo "  make remote-dataset  # run make dataset on the configured remote box"
@@ -138,6 +150,9 @@ help:
 	@echo "  REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training"
 	@echo "  REMOTE_NAME=remote_1_3090"
 	@echo "  REMOTE_GIT_BRANCH=main"
+	@echo "  REMOTE_ENSURE_TORCH_CUDA=1"
+	@echo "  REMOTE_TORCH_VERSION=2.10.0"
+	@echo "  REMOTE_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128"
 	@echo "  FACECLIP_MONITOR_NAME=remote-3090 # optional override if different from REMOTE_NAME"
 	@echo "  OFFICIAL_SYNCNET_CKPT=/abs/path/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_URL=https://drive.google.com/open?id=..."
@@ -145,6 +160,7 @@ help:
 	@echo "  DATASET_FOLDER_ID=1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n"
 	@echo "  DATASET_MANIFEST_PATH=output/faceclip_merge/merge_manifest.jsonl"
 	@echo "  DATASET_INCLUDE_TIERS=\"confident medium\""
+	@echo "  DATASET_RELOAD=1  # ignore merge manifest and revisit all archives"
 	@echo "  SYNCNET_CONFIG=configs/syncnet_cuda3090_medium.yaml"
 	@echo "  GENERATOR_CONFIG=configs/lipsync_cuda3090_hdtf_talkvid.yaml"
 	@echo "  SYNCNET_TEACHER=../../models/wav2lip/checkpoints/lipsync_expert.pth"
@@ -176,6 +192,13 @@ server-setup:
 	DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg libsndfile1 rsync rclone git make
 	$(PIP) install --upgrade pip
 	$(PIP) install --no-cache-dir -r $(SERVER_PY_REQUIREMENTS)
+	@if [ "$(REMOTE_ENSURE_TORCH_CUDA)" = "1" ]; then \
+		$(PYTHON) $(TRAINING_ROOT)/scripts/ensure_torch_cuda_compat.py \
+			--torch-version "$(REMOTE_TORCH_VERSION)" \
+			--torchvision-version "$(REMOTE_TORCHVISION_VERSION)" \
+			--torchaudio-version "$(REMOTE_TORCHAUDIO_VERSION)" \
+			--index-url "$(REMOTE_TORCH_INDEX_URL)"; \
+	fi
 	@echo "server-setup complete"
 
 remote-sync-code:
@@ -199,6 +222,13 @@ remote-server-setup:
 		DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg libsndfile1 rsync rclone git make python3-pip; \
 		$(REMOTE_PYTHON) -m pip install --upgrade pip; \
 		$(REMOTE_PYTHON) -m pip install --no-cache-dir -r '$(REMOTE_ROOT)/training/requirements-server.txt'; \
+		if [ '$(REMOTE_ENSURE_TORCH_CUDA)' = '1' ]; then \
+			$(REMOTE_PYTHON) '$(REMOTE_ROOT)/training/scripts/ensure_torch_cuda_compat.py' \
+				--torch-version '$(REMOTE_TORCH_VERSION)' \
+				--torchvision-version '$(REMOTE_TORCHVISION_VERSION)' \
+				--torchaudio-version '$(REMOTE_TORCHAUDIO_VERSION)' \
+				--index-url '$(REMOTE_TORCH_INDEX_URL)'; \
+		fi; \
 	"
 	@echo "remote-server-setup complete: $(REMOTE):$(REMOTE_ROOT)"
 
@@ -284,6 +314,7 @@ remote-faceclip-register:
 		--manifest-rel "$(FACECLIP_REMOTE_ARCHIVE_MANIFEST)" \
 		--cycle-log-rel "$(FACECLIP_REMOTE_CYCLE_LOG)" \
 		--cycle-pid-rel "$(FACECLIP_REMOTE_CYCLE_PID)"
+	@$(MAKE) faceclip-monitor-daemon-start
 
 remote-faceclip-unregister:
 	@cd "$(REPO_ROOT)" && $(PYTHON) training/scripts/monitor_faceclip_remotes.py unregister \
@@ -295,10 +326,13 @@ remote-faceclip-start:
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
 		set -euo pipefail; \
 		mkdir -p \"$(REMOTE_ROOT)/training/output/raw_faceclips_x288_cycle\"; \
-		existing=\$$(pgrep -af \"[p]rocess_faceclip_archives_local.sh|[p]rocess_raw_archives_to_lazy_faceclips_gdrive.py\" || true); \
-		if [ -n \"\$$existing\" ]; then \
-			echo \"\$$existing\"; \
-			exit 1; \
+		cycle_pid_file=\"$(REMOTE_ROOT)/$(FACECLIP_REMOTE_CYCLE_PID)\"; \
+		if [ -f \"\$$cycle_pid_file\" ]; then \
+			existing_pid=\$$(cat \"\$$cycle_pid_file\" 2>/dev/null || true); \
+			if [ -n \"\$$existing_pid\" ] && ps -p \"\$$existing_pid\" >/dev/null 2>&1; then \
+				echo \"cycle already running pid=\$$existing_pid\"; \
+				exit 1; \
+			fi; \
 		fi; \
 		cd \"$(REMOTE_ROOT)/training\"; \
 		nohup /bin/bash workflows/preprocess/process_faceclip_archives_local.sh < /dev/null > /dev/null 2>&1 & \
@@ -311,21 +345,81 @@ remote-faceclip-start:
 	@$(MAKE) remote-faceclip-register REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" FACECLIP_MONITOR_NAME="$(FACECLIP_MONITOR_NAME)"
 	@echo "remote-faceclip-start complete: $(REMOTE):$(PORT)"
 
-faceclip-monitor-refresh:
+faceclip-monitor-daemon-start:
 	@mkdir -p "$(FACECLIP_MONITOR_DIR)"
-	@cd "$(REPO_ROOT)" && $(PYTHON) training/scripts/monitor_faceclip_remotes.py refresh \
-		--registry "$(FACECLIP_MONITOR_REGISTRY)" \
-		--cache "$(FACECLIP_MONITOR_CACHE)" \
-		--output "$(FACECLIP_MONITOR_OUTPUT)" \
-		--ssh-timeout "$(FACECLIP_MONITOR_TIMEOUT)" \
-		--print-output
+	@if [ -f "$(FACECLIP_MONITOR_DAEMON_PID)" ]; then \
+		existing_pid=$$(cat "$(FACECLIP_MONITOR_DAEMON_PID)" 2>/dev/null || true); \
+		if [ -n "$$existing_pid" ] && ps -p "$$existing_pid" >/dev/null 2>&1; then \
+			echo "faceclip monitor daemon already running pid=$$existing_pid"; \
+			exit 0; \
+		else \
+			rm -f "$(FACECLIP_MONITOR_DAEMON_PID)"; \
+		fi; \
+	fi
+	@cd "$(REPO_ROOT)" && nohup /bin/bash -lc '\
+		while true; do \
+			$(PYTHON) training/scripts/monitor_faceclip_remotes.py refresh \
+				--registry "$(FACECLIP_MONITOR_REGISTRY)" \
+				--cache "$(FACECLIP_MONITOR_CACHE)" \
+				--output "$(FACECLIP_MONITOR_OUTPUT)" \
+				--ssh-timeout "$(FACECLIP_MONITOR_TIMEOUT)" \
+				>/dev/null 2>>"$(FACECLIP_MONITOR_DAEMON_LOG)" || true; \
+			sleep "$(FACECLIP_MONITOR_INTERVAL)"; \
+		done' \
+		>/dev/null 2>&1 & echo $$! > "$(FACECLIP_MONITOR_DAEMON_PID)"
+	@echo "faceclip monitor daemon started pid=$$(cat "$(FACECLIP_MONITOR_DAEMON_PID)")"
+
+faceclip-monitor-daemon-stop:
+	@if [ -f "$(FACECLIP_MONITOR_DAEMON_PID)" ]; then \
+		existing_pid=$$(cat "$(FACECLIP_MONITOR_DAEMON_PID)" 2>/dev/null || true); \
+		if [ -n "$$existing_pid" ] && ps -p "$$existing_pid" >/dev/null 2>&1; then \
+			kill "$$existing_pid"; \
+			echo "faceclip monitor daemon stopped pid=$$existing_pid"; \
+		fi; \
+		rm -f "$(FACECLIP_MONITOR_DAEMON_PID)"; \
+	else \
+		echo "faceclip monitor daemon not running"; \
+	fi
+
+faceclip-monitor-refresh:
+	@$(MAKE) faceclip-monitor-daemon-start >/dev/null
+	@mkdir -p "$(FACECLIP_MONITOR_DIR)"
+	@if [ -f "$(FACECLIP_MONITOR_REFRESH_PID)" ]; then \
+		existing_pid=$$(cat "$(FACECLIP_MONITOR_REFRESH_PID)" 2>/dev/null || true); \
+		if [ -n "$$existing_pid" ] && ps -p "$$existing_pid" >/dev/null 2>&1; then \
+			:; \
+		else \
+			rm -f "$(FACECLIP_MONITOR_REFRESH_PID)"; \
+		fi; \
+	fi
+	@if [ ! -f "$(FACECLIP_MONITOR_REFRESH_PID)" ]; then \
+		cd "$(REPO_ROOT)" && ( \
+			$(PYTHON) training/scripts/monitor_faceclip_remotes.py refresh \
+				--registry "$(FACECLIP_MONITOR_REGISTRY)" \
+				--cache "$(FACECLIP_MONITOR_CACHE)" \
+				--output "$(FACECLIP_MONITOR_OUTPUT)" \
+				--ssh-timeout "$(FACECLIP_MONITOR_TIMEOUT)" \
+				>/dev/null 2>&1; \
+			rm -f "$(FACECLIP_MONITOR_REFRESH_PID)" \
+		) & \
+		echo $$! > "$(FACECLIP_MONITOR_REFRESH_PID)"; \
+	fi
+	@if [ -f "$(FACECLIP_MONITOR_OUTPUT)" ]; then \
+		cat "$(FACECLIP_MONITOR_OUTPUT)"; \
+	else \
+		echo "faceclip monitor warming up..."; \
+	fi
 
 dataset:
 	@set -euo pipefail; \
 	include_args=""; \
+	reload_args=""; \
 	for tier in $(DATASET_INCLUDE_TIERS); do \
 		include_args="$$include_args --include-tier $$tier"; \
 	done; \
+	if [[ "$(DATASET_RELOAD)" == "1" ]]; then \
+		reload_args="--reload-all"; \
+	fi; \
 	cd $(TRAINING_ROOT); \
 	$(PYTHON) scripts/merge_faceclip_archives_from_gdrive.py \
 		--remote "$(DATASET_REMOTE)" \
@@ -338,6 +432,7 @@ dataset:
 		--hdtf-root "$(DATASET_HDTF_ROOT)" \
 		--talkvid-root "$(DATASET_TALKVID_ROOT)" \
 		--import-subdir "$(DATASET_IMPORT_SUBDIR)" \
+		$$reload_args \
 		$$include_args
 
 remote-dataset:
@@ -356,6 +451,7 @@ remote-dataset:
 			DATASET_HDTF_ROOT='$(DATASET_HDTF_ROOT)' \
 			DATASET_TALKVID_ROOT='$(DATASET_TALKVID_ROOT)' \
 			DATASET_IMPORT_SUBDIR='$(DATASET_IMPORT_SUBDIR)' \
+			DATASET_RELOAD='$(DATASET_RELOAD)' \
 			DATASET_INCLUDE_TIERS='$(DATASET_INCLUDE_TIERS)'; \
 	"
 	@echo "remote-dataset complete: $(REMOTE):$(REMOTE_ROOT)"
