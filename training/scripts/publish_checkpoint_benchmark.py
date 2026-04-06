@@ -27,6 +27,8 @@ import torch
 TRAINING_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = TRAINING_ROOT.parent
 DEFAULT_DRIVE_ROOT_ID = "1y1P-LI3YTPV65zpHXMSrNYsykN2-s5Pv"
+OFFICIAL_WAV2LIP_ROOT = REPO_ROOT / "models" / "wav2lip"
+OFFICIAL_SYNCNET_ROOT = REPO_ROOT / "models" / "official_syncnet"
 
 
 def timestamp() -> str:
@@ -100,26 +102,147 @@ def default_run_name(checkpoint_path: Path) -> str:
     return checkpoint_path.stem
 
 
-def ensure_infer_only_checkpoint(checkpoint_path: Path, infer_only_out: Path | None) -> tuple[Path, list[Path]]:
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if not isinstance(ckpt, dict) or "generator" not in ckpt or "config" not in ckpt:
+def is_local_generator_checkpoint(ckpt: object) -> bool:
+    return isinstance(ckpt, dict) and "generator" in ckpt and "config" in ckpt
+
+
+def is_plain_state_dict_checkpoint(ckpt: object) -> bool:
+    return isinstance(ckpt, dict) and bool(ckpt) and all(isinstance(v, torch.Tensor) for v in ckpt.values())
+
+
+def load_official_wav2lip_class():
+    candidate_roots = [
+        OFFICIAL_SYNCNET_ROOT,
+        OFFICIAL_WAV2LIP_ROOT,
+        REPO_ROOT.parent / "models" / "wav2lip",
+    ]
+    for root in candidate_roots:
+        if not (root / "models").exists():
+            continue
+        root_str = str(root)
+        if root_str not in sys.path:
+            sys.path.insert(0, root_str)
+        if "models" in sys.modules:
+            del sys.modules["models"]
+        from models import Wav2Lip
+
+        return Wav2Lip
+    raise RuntimeError("Could not locate an official Wav2Lip package root for checkpoint adaptation")
+
+
+def convert_local_generator_state_to_official(local_state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    converted: dict[str, torch.Tensor] = {}
+    for key, value in local_state.items():
+        if key.startswith("output_alpha."):
+            continue
+        mapped = key.replace(".conv.", ".conv_block.").replace(".deconv.", ".conv_block.")
+        if mapped.startswith("output_face."):
+            mapped = "output_block." + mapped[len("output_face."):]
+        converted[mapped] = value
+    return converted
+
+
+def convert_local_generator_checkpoint_to_official(
+    checkpoint_path: Path,
+    ckpt: dict,
+    official_out: Path | None,
+) -> tuple[Path, list[Path]]:
+    cfg = ckpt["config"]
+    model_cfg = cfg.get("model", {})
+    img_size = int(model_cfg.get("img_size", 0))
+    base_channels = int(model_cfg.get("base_channels", 0))
+    predict_alpha = bool(model_cfg.get("predict_alpha", False))
+
+    if img_size != 96 or base_channels != 32 or predict_alpha:
         raise RuntimeError(
-            f"Checkpoint does not look like a local generator checkpoint: {checkpoint_path}"
+            "Official-style adapter only supports the 96x96 no-alpha mirror generator "
+            f"(got img_size={img_size}, base_channels={base_channels}, predict_alpha={predict_alpha})"
         )
 
-    keep_keys = {"generator", "config", "epoch"}
-    if set(ckpt.keys()).issubset(keep_keys):
-        log(f"Infer-only checkpoint already provided: {checkpoint_path}")
-        return checkpoint_path, [checkpoint_path]
+    if official_out is None:
+        official_out = checkpoint_path.with_name(f"{checkpoint_path.stem}_official_wav2lip.pth")
+    official_out.parent.mkdir(parents=True, exist_ok=True)
 
-    if infer_only_out is None:
-        infer_only_out = checkpoint_path.with_name(f"{checkpoint_path.stem}_infer_only.pth")
-    infer_only_out.parent.mkdir(parents=True, exist_ok=True)
+    Wav2Lip = load_official_wav2lip_class()
+    official_model = Wav2Lip()
+    official_state = convert_local_generator_state_to_official(ckpt["generator"])
+    official_model.load_state_dict(official_state, strict=True)
+    payload = {
+        "state_dict": official_model.state_dict(),
+        "checkpoint_kind": "official_wav2lip_adapter",
+        "source_checkpoint": str(checkpoint_path),
+        "source_epoch": ckpt.get("epoch"),
+        "source_global_step": ckpt.get("global_step"),
+        "source_best_off_eval_step": ckpt.get("best_off_eval_step"),
+    }
+    torch.save(payload, official_out)
+    log(f"Saved official-style checkpoint: {official_out}")
+    return official_out, [checkpoint_path, official_out]
 
-    slim = {key: ckpt[key] for key in ("generator", "config", "epoch") if key in ckpt}
-    torch.save(slim, infer_only_out)
-    log(f"Saved infer-only checkpoint: {infer_only_out}")
-    return infer_only_out, [checkpoint_path, infer_only_out]
+
+def prepare_benchmark_checkpoint(
+    checkpoint_path: Path,
+    prepared_out: Path | None,
+    checkpoint_adapter: str,
+) -> tuple[Path, list[Path], dict]:
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if isinstance(ckpt, torch.jit.RecursiveScriptModule):
+        return checkpoint_path, [checkpoint_path], {
+            "checkpoint_format": "official_torchscript",
+            "benchmark_format": "official",
+            "adapter": "native",
+        }
+
+    if is_local_generator_checkpoint(ckpt):
+        if checkpoint_adapter == "official_wav2lip":
+            prepared_checkpoint, upload_candidates = convert_local_generator_checkpoint_to_official(
+                checkpoint_path=checkpoint_path,
+                ckpt=ckpt,
+                official_out=prepared_out,
+            )
+            return prepared_checkpoint, upload_candidates, {
+                "checkpoint_format": "local_generator",
+                "benchmark_format": "official",
+                "adapter": "official_wav2lip",
+            }
+
+        keep_keys = {"generator", "config", "epoch"}
+        if set(ckpt.keys()).issubset(keep_keys):
+            log(f"Infer-only checkpoint already provided: {checkpoint_path}")
+            return checkpoint_path, [checkpoint_path], {
+                "checkpoint_format": "local_generator_infer_only",
+                "benchmark_format": "custom",
+                "adapter": "native",
+            }
+
+        if prepared_out is None:
+            prepared_out = checkpoint_path.with_name(f"{checkpoint_path.stem}_infer_only.pth")
+        prepared_out.parent.mkdir(parents=True, exist_ok=True)
+
+        slim = {key: ckpt[key] for key in ("generator", "config", "epoch") if key in ckpt}
+        torch.save(slim, prepared_out)
+        log(f"Saved infer-only checkpoint: {prepared_out}")
+        return prepared_out, [checkpoint_path, prepared_out], {
+            "checkpoint_format": "local_generator_training",
+            "benchmark_format": "custom",
+            "adapter": "native",
+        }
+
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        return checkpoint_path, [checkpoint_path], {
+            "checkpoint_format": "official_state_dict_wrapper",
+            "benchmark_format": "official",
+            "adapter": "native",
+        }
+
+    if is_plain_state_dict_checkpoint(ckpt):
+        return checkpoint_path, [checkpoint_path], {
+            "checkpoint_format": "official_state_dict",
+            "benchmark_format": "official",
+            "adapter": "native",
+        }
+
+    raise RuntimeError(f"Unsupported checkpoint format for benchmark publish: {checkpoint_path}")
 
 
 def benchmark_output_name(face_path: Path, audio_path: Path, checkpoint_path: Path) -> str:
@@ -136,7 +259,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--infer-only-out",
         default=None,
-        help="Optional output path for the slim infer-only checkpoint",
+        help="Optional output path for the prepared benchmark checkpoint",
+    )
+    parser.add_argument(
+        "--checkpoint-adapter",
+        default="native",
+        choices=("native", "official_wav2lip"),
+        help="How to adapt a local generator checkpoint before benchmarking",
     )
     parser.add_argument("--run-name", default=None, help="Drive subdirectory name")
     parser.add_argument("--remote", default="gdrive:", help="rclone remote name")
@@ -172,8 +301,12 @@ def main() -> None:
     if not checkpoint_path.exists():
         raise FileNotFoundError(checkpoint_path)
 
-    infer_only_out = resolve_path(args.infer_only_out) if args.infer_only_out else None
-    infer_checkpoint, upload_candidates = ensure_infer_only_checkpoint(checkpoint_path, infer_only_out)
+    prepared_out = resolve_path(args.infer_only_out) if args.infer_only_out else None
+    benchmark_checkpoint, upload_candidates, checkpoint_info = prepare_benchmark_checkpoint(
+        checkpoint_path,
+        prepared_out,
+        args.checkpoint_adapter,
+    )
 
     run_name = args.run_name or default_run_name(checkpoint_path)
     output_dir = resolve_path(args.output_dir) if args.output_dir else (
@@ -185,7 +318,9 @@ def main() -> None:
         "created_at": timestamp(),
         "run_name": run_name,
         "checkpoint": str(checkpoint_path),
-        "infer_only_checkpoint": str(infer_checkpoint),
+        "benchmark_checkpoint": str(benchmark_checkpoint),
+        "infer_only_checkpoint": str(benchmark_checkpoint),
+        "checkpoint_info": checkpoint_info,
         "uploads": [],
         "benchmarks": [],
     }
@@ -216,7 +351,7 @@ def main() -> None:
             face_path = resolve_path(face_raw)
             if not face_path.exists():
                 raise FileNotFoundError(face_path)
-            out_path = output_dir / benchmark_output_name(face_path, audio_path, infer_checkpoint)
+            out_path = output_dir / benchmark_output_name(face_path, audio_path, benchmark_checkpoint)
             cmd = [
                 sys.executable,
                 str(benchmark_script),
@@ -225,7 +360,7 @@ def main() -> None:
                 "--audio",
                 str(audio_path),
                 "--checkpoint",
-                str(infer_checkpoint),
+                str(benchmark_checkpoint),
                 "--outfile",
                 str(out_path),
                 "--device",

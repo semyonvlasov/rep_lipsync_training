@@ -170,6 +170,17 @@ def load_model(path: str, device: str):
         }
 
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(ckpt, torch.jit.RecursiveScriptModule):
+        model = ckpt.to(device)
+        model.eval()
+        print(f"[model] Loaded TorchScript model in {time.time() - t0:.1f}s")
+        return model, {
+            "kind": "official",
+            "img_size": IMG_SIZE,
+            "mel_step_size": MEL_STEP_SIZE,
+            "audio_cfg": DEFAULT_AUDIO_CFG,
+            "syncnet_T": 1,
+        }
     if isinstance(ckpt, dict) and "generator" in ckpt and "config" in ckpt:
         cfg = ckpt["config"]
         model = LipSyncGenerator(
