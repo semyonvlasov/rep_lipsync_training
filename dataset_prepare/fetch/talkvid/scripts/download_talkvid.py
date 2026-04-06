@@ -447,6 +447,11 @@ def download_clip(
 def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Download TalkVid raw clips")
     parser.add_argument("--output", default="data/talkvid", help="Output root")
+    parser.add_argument(
+        "--metadata-dir",
+        default="",
+        help="Optional shared metadata cache directory. Defaults to <output>/metadata.",
+    )
     parser.add_argument("--variant", choices=sorted(TALKVID_METADATA_URLS), default="with_captions")
     parser.add_argument("--max-height", type=int, default=720)
     parser.add_argument("--min-duration", type=float, default=4.0)
@@ -522,7 +527,7 @@ def main() -> int:
         return 1
 
     output_root = args.output
-    metadata_dir = os.path.join(output_root, "metadata")
+    metadata_dir = args.metadata_dir or os.path.join(output_root, "metadata")
     raw_dir = os.path.join(output_root, "raw")
     os.makedirs(metadata_dir, exist_ok=True)
     os.makedirs(raw_dir, exist_ok=True)

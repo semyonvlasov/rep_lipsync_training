@@ -146,6 +146,7 @@ def merge_batch_manifest(batch_root: Path, global_manifest: Path, log_fp: object
 def package_batch_root(
     python_bin: str,
     script_dir: Path,
+    batch_name: str,
     batch_root: Path,
     archives_dir: Path,
     log_fp: object | None,
@@ -167,6 +168,8 @@ def package_batch_root(
         "talkvid_raw",
         "--batch-root",
         str(batch_root),
+        "--batch-name",
+        batch_name,
         "--max-clips",
         "0",
         "--max-gb",
@@ -204,10 +207,29 @@ def launch_uploader(
     return proc
 
 
+def maybe_reap_uploader(
+    upload_proc: subprocess.Popen[bytes] | None,
+    *,
+    log_fp: object | None,
+    final_rc: int,
+) -> tuple[subprocess.Popen[bytes] | None, int]:
+    if upload_proc is None:
+        return None, final_rc
+    poll_rc = upload_proc.poll()
+    if poll_rc is None:
+        return upload_proc, final_rc
+    rc = upload_proc.wait()
+    log(f"[cycle] uploader pid={upload_proc.pid} finished rc={rc}", log_fp=log_fp)
+    if final_rc == 0 and rc != 0:
+        final_rc = rc
+    return None, final_rc
+
+
 def launch_fetch(
     python_bin: str,
     script_dir: Path,
     batch_root: Path,
+    metadata_dir: Path,
     variant: str,
     download_max_height: int,
     download_min_duration: float,
@@ -236,6 +258,8 @@ def launch_fetch(
         str(script_dir / "download_talkvid.py"),
         "--output",
         str(batch_root),
+        "--metadata-dir",
+        str(metadata_dir),
         "--variant",
         variant,
         "--max-height",
@@ -305,12 +329,14 @@ def main() -> int:
 
         data_root = workspace_root
         archives_dir = workspace_root / "archives"
+        metadata_dir = workspace_root / "metadata"
         batch_runs_dir = data_root / "batches"
         global_manifest = data_root / "download_manifest.jsonl"
         batch_counter_file = data_root / "next_fetch_batch_index.txt"
 
         batch_runs_dir.mkdir(parents=True, exist_ok=True)
         archives_dir.mkdir(parents=True, exist_ok=True)
+        metadata_dir.mkdir(parents=True, exist_ok=True)
         out_dir.mkdir(parents=True, exist_ok=True)
 
         log_fp = open_stage_log(out_dir, "cycle.log")
@@ -348,6 +374,7 @@ def main() -> int:
             log("[cycle] start", log_fp=log_fp)
             log(f"[cycle] data_root={data_root}", log_fp=log_fp)
             log(f"[cycle] batch_runs_dir={batch_runs_dir}", log_fp=log_fp)
+            log(f"[cycle] metadata_dir={metadata_dir}", log_fp=log_fp)
             log(f"[cycle] raw_gdrive_folder_id={raw_folder_id}", log_fp=log_fp)
             if args.resume_batch is not None:
                 log(f"[cycle] cli_resume_batch={args.resume_batch}", log_fp=log_fp)
@@ -396,12 +423,11 @@ def main() -> int:
             first_iteration = True
 
             while True:
-                if upload_proc is not None and upload_proc.poll() is not None:
-                    rc = upload_proc.wait()
-                    log(f"[cycle] uploader pid={upload_proc.pid} finished rc={rc}", log_fp=log_fp)
-                    if final_rc == 0 and rc != 0:
-                        final_rc = rc
-                    upload_proc = None
+                upload_proc, final_rc = maybe_reap_uploader(
+                    upload_proc,
+                    log_fp=log_fp,
+                    final_rc=final_rc,
+                )
 
                 if first_iteration and first_batch_selection is not None:
                     batch_name, batch_root = first_batch_selection
@@ -421,6 +447,7 @@ def main() -> int:
                     python_bin=python_bin,
                     script_dir=paths.script_dir,
                     batch_root=batch_root,
+                    metadata_dir=metadata_dir,
                     variant=variant,
                     download_max_height=download_max_height,
                     download_min_duration=download_min_duration,
@@ -451,7 +478,19 @@ def main() -> int:
                 )
 
                 merge_batch_manifest(batch_root, global_manifest, log_fp)
-                package_batch_root(python_bin, paths.script_dir, batch_root, archives_dir, log_fp)
+                package_batch_root(
+                    python_bin,
+                    paths.script_dir,
+                    batch_name,
+                    batch_root,
+                    archives_dir,
+                    log_fp,
+                )
+                upload_proc, final_rc = maybe_reap_uploader(
+                    upload_proc,
+                    log_fp=log_fp,
+                    final_rc=final_rc,
+                )
                 if upload_proc is None:
                     upload_proc = launch_uploader(
                         python_bin,

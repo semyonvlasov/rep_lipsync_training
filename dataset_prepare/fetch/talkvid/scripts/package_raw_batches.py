@@ -65,6 +65,15 @@ def next_batch_index(archives_dir: Path) -> int:
     return next_idx
 
 
+def parse_explicit_batch_index(batch_name: str) -> int:
+    value = str(batch_name).strip()
+    if value.startswith("batch_"):
+        value = value[len("batch_") :]
+    if not value.isdigit():
+        raise ValueError(f"batch_name must look like 0039 or batch_0039, got: {batch_name!r}")
+    return int(value)
+
+
 def flush_batch(archives_dir: Path, prefix: str, batch_index: int, files: list[Path]) -> Path:
     archives_dir.mkdir(parents=True, exist_ok=True)
     tar_path = archives_dir / f"{prefix}_batch_{batch_index:04d}.tar"
@@ -111,6 +120,11 @@ def main() -> int:
         default=None,
         help="Optional per-run root directory to remove after successful upload",
     )
+    parser.add_argument(
+        "--batch-name",
+        default="",
+        help="Optional explicit archive batch id like 0039 or batch_0039.",
+    )
     parser.add_argument("--max-clips", type=int, default=10, help="Max clips per archive (0=unlimited)")
     parser.add_argument("--max-gb", type=float, default=1.0, help="Approximate max total mp4 size per archive")
     parser.add_argument("--max-batches", type=int, default=0, help="Stop after creating this many new batches (0=unlimited)")
@@ -133,7 +147,12 @@ def main() -> int:
 
     batch_files: list[Path] = []
     batch_bytes = 0
-    batch_index = next_batch_index(archives_dir)
+    explicit_batch_name = str(args.batch_name or "").strip()
+    batch_index = (
+        parse_explicit_batch_index(explicit_batch_name)
+        if explicit_batch_name
+        else next_batch_index(archives_dir)
+    )
     created = 0
 
     for path in files:
@@ -146,6 +165,7 @@ def main() -> int:
                 archives_dir,
                 {
                     "batch_index": batch_index,
+                    "batch_name": f"{batch_index:04d}",
                     "tar_path": str(tar_path),
                     "raw_dir": str(raw_dir),
                     "batch_root": args.batch_root,
@@ -180,6 +200,7 @@ def main() -> int:
             archives_dir,
             {
                 "batch_index": batch_index,
+                "batch_name": f"{batch_index:04d}",
                 "tar_path": str(tar_path),
                 "raw_dir": str(raw_dir),
                 "batch_root": args.batch_root,
