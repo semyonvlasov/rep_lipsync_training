@@ -98,6 +98,11 @@ purpose. They should be reviewed one by one before being added:
   `training/configs/lipsync_cuda3090_hdtf_talkvid.yaml` by default and points
   at `models/official_syncnet/checkpoints/lipsync_expert.pth` unless
   overridden.
+- `make train-generator-mirror-gan`
+  Runs `training/scripts/train_generator_mirror_gan.py`, an alternative
+  trainer that mirrors the upstream `hq_wav2lip_train.py` loop and checkpoint
+  semantics while reading from the merged lazy dataset roots and speaker
+  snapshots used in this repo.
 - `make prewarm-syncnet-cache`
   Pre-materializes lazy faceclip samples into the configured cache root using
   the current audio frontend and frame size from the config. This is useful

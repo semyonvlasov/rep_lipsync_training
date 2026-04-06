@@ -31,6 +31,7 @@ PROCESS_PREWARM_SFD ?= 1
 SMOKE_LAZY_WORKFLOW ?= workflows/train/run_lazy_smoke_remote_20260325.sh
 SYNCNET_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
 GENERATOR_CONFIG ?= configs/lipsync_cuda3090_hdtf_talkvid.yaml
+GENERATOR_MIRROR_GAN_CONFIG ?= configs/generator_mirror_gan_hdtf_talkvid.yaml
 PREWARM_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
 PREWARM_SPEAKER_LIST ?=
 PREWARM_LOG_EVERY ?= 100
@@ -66,6 +67,8 @@ SYNCNET_TEACHER ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 OFFICIAL_SYNCNET_PATH ?= ../../models/wav2lip/checkpoints/lipsync_expert.pth
 SYNCNET_RESUME ?=
 GENERATOR_RESUME ?=
+GENERATOR_MIRROR_GAN_RESUME ?=
+GENERATOR_MIRROR_GAN_DISC_RESUME ?=
 SPEAKER_LIST ?=
 VAL_SPEAKER_LIST ?=
 SYNCNET_OUTPUT_DIR ?=
@@ -116,7 +119,7 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -140,6 +143,7 @@ help:
 	@echo "  make smoke-lazy      # run the lazy dataset smoke workflow"
 	@echo "  make train-syncnet   # run scripts/train_syncnet.py with \$$SYNCNET_CONFIG"
 	@echo "  make train-generator # run scripts/train_generator.py with \$$GENERATOR_CONFIG"
+	@echo "  make train-generator-mirror-gan # run scripts/train_generator_mirror_gan.py with \$$GENERATOR_MIRROR_GAN_CONFIG"
 	@echo "  make prewarm-syncnet-cache # pre-materialize lazy frames/mels into the configured cache root"
 	@echo "  make observe-system  # start a background CPU/RAM/GPU/VRAM/network observer"
 	@echo "  make watch-syncnet-generator # wait for SyncNet, benchmark all epochs vs official, then launch generator"
@@ -167,10 +171,13 @@ help:
 	@echo "  DATASET_RELOAD=1  # ignore merge manifest and revisit all archives"
 	@echo "  SYNCNET_CONFIG=configs/syncnet_cuda3090_medium.yaml"
 	@echo "  GENERATOR_CONFIG=configs/lipsync_cuda3090_hdtf_talkvid.yaml"
+	@echo "  GENERATOR_MIRROR_GAN_CONFIG=configs/generator_mirror_gan_hdtf_talkvid.yaml"
 	@echo "  SYNCNET_TEACHER=../../models/wav2lip/checkpoints/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_PATH=../../models/wav2lip/checkpoints/lipsync_expert.pth"
 	@echo "  SYNCNET_RESUME=/abs/or/rel/checkpoint.pth"
 	@echo "  GENERATOR_RESUME=/abs/or/rel/checkpoint.pth"
+	@echo "  GENERATOR_MIRROR_GAN_RESUME=/abs/or/rel/checkpoint.pth"
+	@echo "  GENERATOR_MIRROR_GAN_DISC_RESUME=/abs/or/rel/disc_checkpoint.pth"
 	@echo "  SPEAKER_LIST=/abs/or/rel/speakers.txt"
 	@echo "  VAL_SPEAKER_LIST=/abs/or/rel/val_speakers.txt"
 	@echo "  SYNCNET_OUTPUT_DIR=output/<syncnet_run_dir>"
@@ -544,6 +551,15 @@ train-generator:
 		--syncnet $(SYNCNET_TEACHER) \
 		$(if $(GENERATOR_RESUME),--resume $(GENERATOR_RESUME),) \
 		$(if $(SPEAKER_LIST),--speaker-list $(SPEAKER_LIST),)
+
+train-generator-mirror-gan:
+	cd $(TRAINING_ROOT) && $(PYTHON) scripts/train_generator_mirror_gan.py \
+		--config $(GENERATOR_MIRROR_GAN_CONFIG) \
+		--syncnet $(SYNCNET_TEACHER) \
+		$(if $(GENERATOR_MIRROR_GAN_RESUME),--checkpoint-path $(GENERATOR_MIRROR_GAN_RESUME),) \
+		$(if $(GENERATOR_MIRROR_GAN_DISC_RESUME),--disc-checkpoint-path $(GENERATOR_MIRROR_GAN_DISC_RESUME),) \
+		$(if $(SPEAKER_LIST),--speaker-list $(SPEAKER_LIST),) \
+		$(if $(VAL_SPEAKER_LIST),--val-speaker-list $(VAL_SPEAKER_LIST),)
 
 prewarm-syncnet-cache:
 	cd $(TRAINING_ROOT) && $(PYTHON) scripts/prewarm_lazy_cache.py \
