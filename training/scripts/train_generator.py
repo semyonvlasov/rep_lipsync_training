@@ -265,7 +265,12 @@ def official_sync_loss_from_cosine(cos_sim):
     # in (0, 1), so we mirror the intent with an autocast-safe compatibility
     # shim rather than silently switching to a different objective.
     targets = torch.ones((cos_sim.size(0), 1), device=cos_sim.device, dtype=torch.float32)
-    probs = cos_sim.float().clamp_(1.0e-6, 1.0 - 1.0e-6).unsqueeze(1)
+    probs = torch.nan_to_num(
+        cos_sim.float(),
+        nan=0.5,
+        posinf=1.0 - 1.0e-6,
+        neginf=1.0e-6,
+    ).clamp_(1.0e-6, 1.0 - 1.0e-6).unsqueeze(1)
     if cos_sim.device.type == "cuda":
         with torch.amp.autocast("cuda", enabled=False):
             return F.binary_cross_entropy(probs, targets)
@@ -829,7 +834,12 @@ def main():
                 sync_reward = torch.tensor(0.0, device=device)
                 batch_use_sync = (effective_sync_wt > 0) and epoch >= sync_warmup_epochs
                 if batch_use_sync:
-                    cos_sim = sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, pred_face)
+                    cos_sim = torch.nan_to_num(
+                        sync_cosine_score(syncnet, syncnet_kind, mel, indiv_mels, pred_face),
+                        nan=0.5,
+                        posinf=1.0 - 1.0e-6,
+                        neginf=1.0e-6,
+                    )
                     sync_reward = cos_sim.mean()
                     sync_loss = official_sync_loss_from_cosine(cos_sim)
 

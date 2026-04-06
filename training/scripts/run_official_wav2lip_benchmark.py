@@ -20,6 +20,8 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -57,6 +59,7 @@ DEFAULT_AUDIO_CFG = {
     "fmax": 7600,
     "preemphasis": 0.97,
 }
+CACHE_VERSION = 1
 
 
 def parse_args():
@@ -105,6 +108,12 @@ def parse_args():
         default=None,
         help="Optional path to s3fd.pth. If missing, bundled detector will download it.",
     )
+    parser.add_argument(
+        "--cache_root",
+        default=None,
+        help="Optional cache root for decoded frames, face detections, and audio features",
+    )
+    parser.add_argument("--no_cache", action="store_true", help="Disable sample cache reuse")
     return parser.parse_args()
 
 
@@ -240,6 +249,190 @@ def resolve_s3fd_path(user_path: str | None) -> str | None:
     if candidate.exists():
         return str(candidate)
     return None
+
+
+def default_cache_root() -> Path:
+    return TRAINING_ROOT / "output" / "checkpoint_benchmark_cache"
+
+
+def file_sha256(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stable_hash(payload: dict) -> str:
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def load_frames_cached(face_path: str, resize_factor: int, cache_root: Path | None):
+    if cache_root is None:
+        return read_frames(face_path, resize_factor), None
+
+    face_hash = file_sha256(face_path)
+    cache_key = stable_hash(
+        {
+            "kind": "frames",
+            "version": CACHE_VERSION,
+            "face_hash": face_hash,
+            "resize_factor": int(resize_factor),
+        }
+    )
+    cache_dir = cache_root / "frames" / cache_key
+    frames_path = cache_dir / "frames.npy"
+    meta_path = cache_dir / "meta.json"
+
+    if frames_path.exists() and meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        frames = np.load(frames_path, allow_pickle=False)
+        print(f"[cache] frames hit: {cache_dir}")
+        return (list(frames), meta.get("fps")), face_hash
+
+    frames, fps = read_frames(face_path, resize_factor)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    np.save(frames_path, np.asarray(frames, dtype=np.uint8), allow_pickle=False)
+    save_json(
+        meta_path,
+        {
+            "kind": "frames",
+            "version": CACHE_VERSION,
+            "face_path": str(face_path),
+            "face_hash": face_hash,
+            "resize_factor": int(resize_factor),
+            "fps": fps,
+            "frame_count": int(len(frames)),
+        },
+    )
+    print(f"[cache] frames store: {cache_dir}")
+    return (frames, fps), face_hash
+
+
+def rebuild_face_det_results(images, coords: np.ndarray):
+    out = []
+    for image, rect in zip(images, coords):
+        y1, y2, x1, x2 = [int(v) for v in rect.tolist()]
+        out.append((image[y1:y2, x1:x2], (y1, y2, x1, x2)))
+    return out
+
+
+def face_detect_sfd_cached(
+    images,
+    pads,
+    nosmooth: bool,
+    batch_size: int,
+    detector_device: str,
+    s3fd_path: str | None,
+    cache_root: Path | None,
+    face_hash: str,
+    static: bool,
+):
+    if cache_root is None:
+        return face_detect_sfd(images, pads, nosmooth, batch_size, detector_device, s3fd_path)
+
+    frame_shape = list(images[0].shape[:2]) if images else None
+    cache_key = stable_hash(
+        {
+            "kind": "face_det",
+            "version": CACHE_VERSION,
+            "face_hash": face_hash,
+            "static": bool(static),
+            "pads": [int(v) for v in pads],
+            "nosmooth": bool(nosmooth),
+            "frame_count": int(len(images)),
+            "frame_shape": frame_shape,
+            "detector": "sfd",
+        }
+    )
+    cache_dir = cache_root / "face_det" / cache_key
+    coords_path = cache_dir / "coords.npy"
+    meta_path = cache_dir / "meta.json"
+
+    if coords_path.exists() and meta_path.exists():
+        coords = np.load(coords_path, allow_pickle=False)
+        print(f"[cache] face_det hit: {cache_dir}")
+        return rebuild_face_det_results(images, coords)
+
+    face_det_results = face_detect_sfd(images, pads, nosmooth, batch_size, detector_device, s3fd_path)
+    coords = np.asarray([coords for _face, coords in face_det_results], dtype=np.int32)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    np.save(coords_path, coords, allow_pickle=False)
+    save_json(
+        meta_path,
+        {
+            "kind": "face_det",
+            "version": CACHE_VERSION,
+            "face_hash": face_hash,
+            "static": bool(static),
+            "pads": [int(v) for v in pads],
+            "nosmooth": bool(nosmooth),
+            "frame_count": int(len(images)),
+            "frame_shape": frame_shape,
+            "detector": "sfd",
+        },
+    )
+    print(f"[cache] face_det store: {cache_dir}")
+    return face_det_results
+
+
+def get_mel_chunks_cached(
+    audio_path: str,
+    fps: float,
+    audio_cfg: dict,
+    mel_step_size: int,
+    cache_root: Path | None,
+):
+    if cache_root is None:
+        return get_mel_chunks(audio_path, fps, audio_cfg, mel_step_size), None
+
+    audio_hash = file_sha256(audio_path)
+    cache_key = stable_hash(
+        {
+            "kind": "audio",
+            "version": CACHE_VERSION,
+            "audio_hash": audio_hash,
+            "fps": float(fps),
+            "mel_step_size": int(mel_step_size),
+            "audio_cfg": audio_cfg,
+        }
+    )
+    cache_dir = cache_root / "audio" / cache_key
+    mel_chunks_path = cache_dir / "mel_chunks.npy"
+    meta_path = cache_dir / "meta.json"
+
+    if mel_chunks_path.exists() and meta_path.exists():
+        mel_chunks = np.load(mel_chunks_path, allow_pickle=False)
+        print(f"[cache] audio hit: {cache_dir}")
+        return mel_chunks, audio_hash
+
+    mel_chunks = get_mel_chunks(audio_path, fps, audio_cfg, mel_step_size)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    np.save(mel_chunks_path, np.asarray(mel_chunks, dtype=np.float32), allow_pickle=False)
+    save_json(
+        meta_path,
+        {
+            "kind": "audio",
+            "version": CACHE_VERSION,
+            "audio_path": str(audio_path),
+            "audio_hash": audio_hash,
+            "fps": float(fps),
+            "mel_step_size": int(mel_step_size),
+            "audio_cfg": audio_cfg,
+            "mel_chunk_count": int(len(mel_chunks)),
+        },
+    )
+    print(f"[cache] audio store: {cache_dir}")
+    return mel_chunks, audio_hash
 
 
 def face_detect_sfd(images, pads, nosmooth: bool, batch_size: int, detector_device: str, s3fd_path: str | None):
@@ -425,15 +618,21 @@ def main():
     if is_image:
         args.static = True
 
-    frames, video_fps = read_frames(args.face, args.resize_factor)
+    cache_root = None if args.no_cache else (Path(args.cache_root).resolve() if args.cache_root else default_cache_root())
+    if cache_root is not None:
+        cache_root.mkdir(parents=True, exist_ok=True)
+        print(f"[cache] root: {cache_root}")
+
+    (frames, video_fps), face_hash = load_frames_cached(args.face, args.resize_factor, cache_root)
     fps = video_fps or args.fps
 
     model, model_meta = load_model(args.checkpoint, device=device)
-    mel_chunks = get_mel_chunks(
+    mel_chunks, _audio_hash = get_mel_chunks_cached(
         args.audio,
         fps,
         audio_cfg=model_meta["audio_cfg"],
         mel_step_size=model_meta["mel_step_size"],
+        cache_root=cache_root,
     )
     if not args.static:
         frames = frames[: len(mel_chunks)]
@@ -442,13 +641,16 @@ def main():
     t_fd = time.time()
     s3fd_path = resolve_s3fd_path(args.s3fd_path)
     detection_frames = [frames[0]] if args.static else frames
-    face_det_results = face_detect_sfd(
+    face_det_results = face_detect_sfd_cached(
         detection_frames,
         pads=args.pads,
         nosmooth=args.nosmooth,
         batch_size=args.face_det_batch_size,
         detector_device=detector_device,
         s3fd_path=s3fd_path,
+        cache_root=cache_root,
+        face_hash=face_hash or file_sha256(args.face),
+        static=args.static,
     )
     print(f"[face_det] Total: {time.time() - t_fd:.1f}s")
 
