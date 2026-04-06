@@ -203,7 +203,18 @@ bootstrap-fetch:
 			echo "bootstrap-fetch requires Homebrew on macOS"; \
 			exit 1; \
 		fi; \
-		brew install ffmpeg rclone python; \
+		brew_prefix="$$(brew --prefix)"; \
+		translated="$$(sysctl -in sysctl.proc_translated 2>/dev/null || echo 0)"; \
+		brew_cmd=(brew); \
+		if [ "$$brew_prefix" = "/opt/homebrew" ] && { [ "$$(uname -m)" = "x86_64" ] || [ "$$translated" = "1" ]; }; then \
+			brew_cmd=(/usr/bin/arch -arm64 brew); \
+		fi; \
+		"$${brew_cmd[@]}" install ffmpeg rclone python; \
+		fetch_python="$$brew_prefix/bin/python3"; \
+		if [ ! -x "$$fetch_python" ]; then \
+			echo "bootstrap-fetch could not find Homebrew python3 at $$fetch_python"; \
+			exit 1; \
+		fi; \
 	elif command -v apt-get >/dev/null 2>&1; then \
 		sudo_cmd=""; \
 		if [ "$$(id -u)" -ne 0 ]; then \
@@ -211,12 +222,13 @@ bootstrap-fetch:
 		fi; \
 		$$sudo_cmd apt-get update; \
 		DEBIAN_FRONTEND=noninteractive $$sudo_cmd apt-get install -y ffmpeg libsndfile1 rclone git curl make python3 python3-venv; \
+		fetch_python="$(PYTHON)"; \
 	else \
 		echo "bootstrap-fetch supports macOS/Homebrew and Debian/Ubuntu apt-get only"; \
 		exit 1; \
 	fi; \
 	if [ ! -d "$(FETCH_VENV)" ]; then \
-		$(PYTHON) -m venv "$(FETCH_VENV)"; \
+		"$$fetch_python" -m venv "$(FETCH_VENV)"; \
 	fi; \
 	"$(FETCH_VENV)/bin/python" -m pip install --upgrade pip; \
 	"$(FETCH_VENV)/bin/python" -m pip install --no-cache-dir -r "$(SERVER_PY_REQUIREMENTS)" yt-dlp; \
