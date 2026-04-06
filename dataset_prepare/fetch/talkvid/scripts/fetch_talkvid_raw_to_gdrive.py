@@ -220,6 +220,7 @@ def launch_fetch(
     max_rate_limit_cooldowns: int,
     cookies_file: str,
     cookies_from_browser: str,
+    cookies_rotate_every_successes: int,
     download_jobs: int,
     log_fp: object | None,
 ) -> subprocess.Popen[bytes]:
@@ -262,6 +263,8 @@ def launch_fetch(
         str(rate_limit_cooldown_seconds),
         "--max-rate-limit-cooldowns",
         str(max_rate_limit_cooldowns),
+        "--cookies-rotate-every-successes",
+        str(cookies_rotate_every_successes),
     ]
     if cookies_from_browser:
         cmd.extend(["--cookies-from-browser", cookies_from_browser])
@@ -284,17 +287,15 @@ def main() -> int:
         gdrive_remote = get_str(config, "gdrive", "remote")
         raw_folder_id = get_str(config, "gdrive", "raw", "folder_id")
 
-        data_root = resolve_repo_path(
-            paths.repo_root, get_str(config, "paths", "processing_folder")
-        )
-        archives_dir = resolve_repo_path(
-            paths.repo_root, get_str(config, "paths", "raw_archives_folder")
+        workspace_root = resolve_repo_path(
+            paths.repo_root, get_str(config, "paths", "workspace_root")
         )
         out_dir = resolve_repo_path(paths.repo_root, get_str(config, "paths", "log_folder"))
-        assert data_root is not None
-        assert archives_dir is not None
+        assert workspace_root is not None
         assert out_dir is not None
 
+        data_root = workspace_root
+        archives_dir = workspace_root / "archives"
         raw_dir = data_root / "raw"
         batch_runs_dir = data_root / "batches"
         global_manifest = data_root / "download_manifest.jsonl"
@@ -333,6 +334,9 @@ def main() -> int:
             cookies_from_browser = get_str(
                 config, "cookies", "from_browser", allow_empty=True
             )
+            cookies_rotate_every_successes = get_int(
+                config, "cookies", "rotate_every_successes", default=0
+            )
 
             log("[cycle] start", log_fp=log_fp)
             log(f"[cycle] data_root={data_root}", log_fp=log_fp)
@@ -348,12 +352,13 @@ def main() -> int:
                 f"fetch_target_gb={fetch_target_gb} jobs={download_jobs} "
                 f"request_min_interval_s={request_min_interval_seconds} "
                 f"rate_limit_cooldown_s={rate_limit_cooldown_seconds} "
-                f"max_rate_limit_cooldowns={max_rate_limit_cooldowns}",
+                f"max_rate_limit_cooldowns={max_rate_limit_cooldowns} "
+                f"cookies_rotate_every_successes={cookies_rotate_every_successes}",
                 log_fp=log_fp,
             )
             if cookies_from_browser:
                 log(f"[cycle] cookies_from_browser={cookies_from_browser}", log_fp=log_fp)
-            else:
+            if cookies_file:
                 log(f"[cycle] cookies_file={cookies_file}", log_fp=log_fp)
 
             first_batch_selection: tuple[str, Path] | None = None
@@ -423,6 +428,7 @@ def main() -> int:
                     max_rate_limit_cooldowns=max_rate_limit_cooldowns,
                     cookies_file=cookies_file,
                     cookies_from_browser=cookies_from_browser,
+                    cookies_rotate_every_successes=cookies_rotate_every_successes,
                     download_jobs=download_jobs,
                     log_fp=log_fp,
                 )

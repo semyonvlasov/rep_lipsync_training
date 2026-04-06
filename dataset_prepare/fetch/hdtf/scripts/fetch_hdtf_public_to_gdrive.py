@@ -47,15 +47,14 @@ def main() -> int:
         gdrive_remote = get_str(config, "gdrive", "remote")
         raw_folder_id = get_str(config, "gdrive", "raw", "folder_id")
 
-        data_root = resolve_repo_path(
-            paths.repo_root, get_str(config, "paths", "processing_folder")
-        )
-        archives_dir = resolve_repo_path(
-            paths.repo_root, get_str(config, "paths", "raw_archives_folder")
+        workspace_root = resolve_repo_path(
+            paths.repo_root, get_str(config, "paths", "workspace_root")
         )
         log_folder = resolve_repo_path(paths.repo_root, get_str(config, "paths", "log_folder"))
-        assert data_root is not None
-        assert archives_dir is not None
+        assert workspace_root is not None
+
+        data_root = workspace_root
+        archives_dir = workspace_root / "archives_raw_batches"
 
         data_root.mkdir(parents=True, exist_ok=True)
         archives_dir.mkdir(parents=True, exist_ok=True)
@@ -75,6 +74,8 @@ def main() -> int:
                     str(get_float(config, "fetch", "target_size_gb")),
                     "--max-height",
                     str(get_int(config, "fetch", "download_max_height")),
+                    "--timeout",
+                    str(get_int(config, "fetch", "download_timeout")),
                 ],
                 log_fp=log_fp,
             )

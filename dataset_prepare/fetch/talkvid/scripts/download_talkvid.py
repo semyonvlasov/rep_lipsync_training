@@ -32,6 +32,8 @@ RATE_LIMIT_MARKERS = (
     "rate-limited by youtube",
     "current session has been rate-limited by youtube",
 )
+COOKIE_SOURCE_BROWSER = "browser"
+COOKIE_SOURCE_FILE = "file"
 
 
 class RequestThrottle:
@@ -197,6 +199,54 @@ def load_blocked_video_keys(manifest_paths: list[str]) -> set[str]:
     return blocked
 
 
+def count_successful_downloads(manifest_path: str) -> int:
+    path = Path(manifest_path)
+    if not path.exists():
+        return 0
+
+    successes = 0
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("status") == "ok":
+                successes += 1
+    return successes
+
+
+def build_cookie_sources(args: argparse.Namespace) -> list[tuple[str, str]]:
+    sources: list[tuple[str, str]] = []
+    if args.cookies_from_browser:
+        sources.append((COOKIE_SOURCE_BROWSER, str(args.cookies_from_browser)))
+    if args.cookies_file:
+        sources.append((COOKIE_SOURCE_FILE, str(args.cookies_file)))
+    return sources
+
+
+def choose_cookie_source(
+    cookie_sources: list[tuple[str, str]],
+    rotate_every_successes: int,
+    successful_downloads: int,
+) -> tuple[Optional[str], Optional[str], str]:
+    if not cookie_sources:
+        return None, None, "none"
+
+    if len(cookie_sources) == 1 or rotate_every_successes <= 0:
+        mode, value = cookie_sources[0]
+    else:
+        source_index = (successful_downloads // rotate_every_successes) % len(cookie_sources)
+        mode, value = cookie_sources[source_index]
+
+    if mode == COOKIE_SOURCE_BROWSER:
+        return mode, value, f"cookies_from_browser={value}"
+    return mode, value, f"cookies_file={value}"
+
+
 def clip_id(item: dict) -> str:
     return str(item.get("id") or "").replace("/", "_")
 
@@ -290,8 +340,8 @@ def download_clip(
     output_path: str,
     max_height: int,
     timeout: int,
-    cookies_file: Optional[str],
-    cookies_from_browser: Optional[str],
+    cookie_mode: Optional[str],
+    cookie_value: Optional[str],
     request_throttle: Optional[RequestThrottle],
 ) -> tuple[bool, str, int, Optional[str]]:
     if os.path.exists(output_path):
@@ -327,10 +377,10 @@ def download_clip(
             "--output", tmp_template,
             video_url,
         ]
-        if cookies_file:
-            cmd[1:1] = ["--cookies", cookies_file]
-        elif cookies_from_browser:
-            cmd[1:1] = ["--cookies-from-browser", cookies_from_browser]
+        if cookie_mode == COOKIE_SOURCE_FILE and cookie_value:
+            cmd[1:1] = ["--cookies", cookie_value]
+        elif cookie_mode == COOKIE_SOURCE_BROWSER and cookie_value:
+            cmd[1:1] = ["--cookies-from-browser", cookie_value]
 
         if request_throttle is not None:
             request_throttle.wait_turn()
@@ -419,7 +469,13 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--delay-seconds", type=int, default=0)
     parser.add_argument("--cookies-file", default=os.environ.get("YTDLP_COOKIES_FILE"))
     parser.add_argument("--cookies-from-browser", default=os.environ.get("YTDLP_COOKIES_FROM_BROWSER"))
-    parser.add_argument("--jobs", type=int, default=4, help="Concurrent yt-dlp jobs")
+    parser.add_argument(
+        "--cookies-rotate-every-successes",
+        type=int,
+        default=0,
+        help="Rotate between configured cookie sources every N successful downloads (0=disabled)",
+    )
+    parser.add_argument("--jobs", type=int, default=1, help="Concurrent yt-dlp jobs")
     parser.add_argument(
         "--request-min-interval-seconds",
         type=float,
@@ -467,6 +523,8 @@ def main() -> int:
     manifest_path = os.path.join(output_root, args.manifest_name)
     completed_ids = load_completed_ids(args.skip_manifest)
     blocked_video_keys = load_blocked_video_keys(args.skip_manifest)
+    cookie_sources = build_cookie_sources(args)
+    rotate_every_successes = max(0, args.cookies_rotate_every_successes)
 
     start_raw_bytes = get_dir_size_bytes(raw_dir)
     target_added_bytes = int(args.target_additional_gb * (1024 ** 3))
@@ -486,13 +544,19 @@ def main() -> int:
     log(f"[TalkVid] request_min_interval_seconds={args.request_min_interval_seconds:.3f}")
     log(f"[TalkVid] rate_limit_cooldown_seconds={args.rate_limit_cooldown_seconds}")
     log(f"[TalkVid] max_rate_limit_cooldowns={args.max_rate_limit_cooldowns}")
+    log(f"[TalkVid] cookies_rotate_every_successes={rotate_every_successes}")
+    if args.cookies_from_browser:
+        log(f"[TalkVid] cookies_from_browser={args.cookies_from_browser}")
     if args.cookies_file:
         log(f"[TalkVid] cookies_file={args.cookies_file}")
-    elif args.cookies_from_browser:
-        log(f"[TalkVid] cookies_from_browser={args.cookies_from_browser}")
+    if rotate_every_successes > 0 and len(cookie_sources) >= 2:
+        log("[TalkVid] cookie rotation enabled across browser/file sources")
+    elif rotate_every_successes > 0:
+        log("[TalkVid] cookie rotation requested but only one cookie source is configured")
 
     attempted = 0
     downloaded = 0
+    cookie_successes = count_successful_downloads(manifest_path)
     downloaded_bytes = 0
     skipped_existing = 0
     skipped_blocked_source = 0
@@ -508,6 +572,7 @@ def main() -> int:
     target_reached_hit = False
     bot_check_notice_sent = False
     rate_limit_notice_sent = False
+    current_cookie_label: Optional[str] = None
 
     def log_result(
         attempt_index: int,
@@ -517,7 +582,7 @@ def main() -> int:
         size_bytes: int,
         detail: Optional[str],
     ) -> None:
-        nonlocal downloaded, downloaded_bytes, failures, bot_check_hit
+        nonlocal downloaded, downloaded_bytes, failures, bot_check_hit, cookie_successes
         nonlocal rate_limited_hit, stop_submitting, rate_limit_events
         nonlocal bot_check_notice_sent, rate_limit_notice_sent
 
@@ -543,6 +608,7 @@ def main() -> int:
 
         if ok:
             downloaded += 1
+            cookie_successes += 1
             downloaded_bytes += size_bytes
             size_mb = size_bytes / (1024 ** 2)
             log(
@@ -633,14 +699,25 @@ def main() -> int:
                         continue
 
                     attempted += 1
+                    cookie_mode, cookie_value, cookie_label = choose_cookie_source(
+                        cookie_sources,
+                        rotate_every_successes,
+                        cookie_successes,
+                    )
+                    if cookie_label != current_cookie_label:
+                        log(
+                            f"[TalkVid] active_cookie_source={cookie_label} "
+                            f"after_successes={cookie_successes}"
+                        )
+                        current_cookie_label = cookie_label
                     future = executor.submit(
                         download_clip,
                         item,
                         out_path,
                         args.max_height,
                         args.timeout,
-                        args.cookies_file,
-                        args.cookies_from_browser,
+                        cookie_mode,
+                        cookie_value,
                         request_throttle,
                     )
                     pending[future] = (attempted, item)

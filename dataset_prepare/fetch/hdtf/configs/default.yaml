@@ -10,13 +10,19 @@ gdrive:
     folder_id: "1v06momk8fR-eqw79Z93zczBx_InWsCS9"
 
 paths:
-  processing_folder: training/data/hdtf
-  raw_archives_folder: training/data/hdtf/archives_raw_batches
-  log_folder: training/output/dataset_prepare/fetch_hdtf
+  workspace_root: training/data/hdtf
+  log_folder: output/dataset_prepare/fetch_hdtf
 
 fetch:
+  # Max raw videos to download from the HDTF annotation lists (0 = no explicit count limit).
   max_videos: 0
+  # Stop downloading once raw/ reaches this size in GB (0 = disabled).
   target_size_gb: 0
+  # yt-dlp picks the best available stream with height <= this value.
   download_max_height: 720
+  # Per-video yt-dlp subprocess timeout in seconds.
+  download_timeout: 120
+  # Max archive size when packing raw mp4 files into upload batches.
   batch_size_gb: 1.0
+  # Max raw tar batches to create in one packaging run (0 = no explicit limit).
   max_batches: 0

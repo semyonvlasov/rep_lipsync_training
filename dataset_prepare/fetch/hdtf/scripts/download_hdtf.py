@@ -55,7 +55,7 @@ def download_annotations(output_dir):
     return annotations
 
 
-def download_video(youtube_url, output_path, max_height=720):
+def download_video(youtube_url, output_path, max_height=720, timeout=120):
     if os.path.exists(output_path):
         return True
     try:
@@ -75,7 +75,7 @@ def download_video(youtube_url, output_path, max_height=720):
             ],
             check=True,
             capture_output=True,
-            timeout=120,
+            timeout=timeout,
         )
         return True
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
@@ -88,6 +88,7 @@ def main():
     parser.add_argument("--output", default="data/hdtf", help="Output directory")
     parser.add_argument("--max-videos", type=int, default=0, help="Max videos (0=all)")
     parser.add_argument("--max-height", type=int, default=720, help="Max video height")
+    parser.add_argument("--timeout", type=int, default=120, help="Per-video yt-dlp timeout in seconds")
     parser.add_argument("--delay-seconds", type=int, default=0, help="Delay execution before starting downloads")
     parser.add_argument(
         "--target-size-gb",
@@ -144,7 +145,7 @@ def main():
             continue
 
         print(f"[{success + failed + 1}/{len(items)}] {name}...", end=" ", flush=True)
-        if download_video(url, raw_path, args.max_height):
+        if download_video(url, raw_path, args.max_height, args.timeout):
             success += 1
             print("OK (download)")
         else:
