@@ -1,6 +1,5 @@
 extends: ../../configs/process_raw_archives_to_lazy_faceclips_gdrive.yaml
 stage: process_talkvid_raw_from_gdrive
 
-process:
+source:
   archive_glob: "*talkvid_raw*.tar"
-  normalized_video_bitrate: 15m

@@ -1,30 +1,52 @@
+# TalkVid local-batches overlay.
+# Most runtime / gdrive / process defaults are inherited from:
+#   dataset_prepare/process/configs/common.yaml
+# This file keeps only local-batches orchestration, paths, and TalkVid naming.
+
+# Merge shared defaults first, then override only the local-batches specifics.
 extends: ../../configs/common.yaml
+
+# Must match the service launcher expectation in process_talkvid_local_batches.py.
 stage: process_talkvid_local_batches
 
-runtime:
-  python_bin: /opt/homebrew/Caskroom/miniforge/base/envs/musetalk/bin/python
-  ffmpeg_threads: 1
-
 paths:
+  # Producer output from fetch/talkvid. The processor scans this folder for
+  # batch_* directories with a completion marker.
   batches_folder: data/dataset_prepare/fetch/talkvid/batches
+
+  # Local working root for normalized clips, temporary processed outputs,
+  # packaged lazy archives, and resume state for this local-batches flow.
   processing_folder: data/dataset_prepare/process/talkvid_local_batches
+
+  # Append-only JSONL event stream for this processor. It records selected /
+  # processed / packaged / uploaded / failed / resume_failed transitions.
   manifest_path: data/dataset_prepare/process/talkvid_local_batches/processed_batch_manifest.jsonl
+
+  # Optional producer completion marker. When follow=true, the consumer exits
+  # only after this flag exists and no more completed batches are pending.
   producer_done_flag: data/dataset_prepare/fetch/talkvid/fetch_done.flag
 
 local_batches:
+  # Keep polling for newly completed fetch batches instead of stopping after
+  # the current queue is drained.
   follow: true
+
+  # Sleep interval between directory scans when follow=true and nothing new is
+  # ready yet.
   poll_seconds: 20
+
+  # Safety cap for one invocation. 0 means "process all available batches".
   max_batches: 0
 
-process:
-  faceclip_size: 256
-  processed_fps: 25
-  max_frames: 750
-  detect_every: 10
-  smooth_window: 9
-  detector_backend: opencv
-  detector_device: auto
-  detector_batch_size: 4
-  resize_device: cpu
-  normalized_video_bitrate: 15m
-  processed_video_bitrate: 420k
+source:
+  # Exporter/runtime tag written into metadata and used for source-specific
+  # quality-tier behavior.
+  dataset_kind: talkvid
+
+  # Reconstructed source archive name stored in manifests and sample metadata:
+  #   talkvid_raw_<batch_name>.tar
+  source_archive_prefix: "talkvid_raw_"
+
+  # Output archive name uploaded to processed Drive:
+  #   talkvid_faceclips_<batch_name>.tar
+  processed_archive_prefix: "talkvid_faceclips_"

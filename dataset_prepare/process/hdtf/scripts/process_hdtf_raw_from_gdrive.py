@@ -74,7 +74,7 @@ def main() -> int:
             "--manifest-path",
             str(manifest_path),
             "--archive-glob",
-            get_str(config, "process", "archive_glob"),
+            get_str(config, "source", "archive_glob"),
             "--max-archives",
             str(get_int(config, "process", "max_archives")),
             "--python-bin",

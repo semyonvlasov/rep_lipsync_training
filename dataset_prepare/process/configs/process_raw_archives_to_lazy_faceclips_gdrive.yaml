@@ -9,16 +9,3 @@ paths:
 
 process:
   max_archives: 0
-  faceclip_size: 288
-  processed_fps: 25
-  max_frames: 250
-  detect_every: 1
-  smooth_window: 5
-  smoothing_style: official_inference
-  framing_style: official_inference
-  detector_backend: sfd
-  detector_device: auto
-  detector_batch_size: 4
-  min_detector_score: 0.99999
-  resize_device: auto
-  processed_video_bitrate: 600k
