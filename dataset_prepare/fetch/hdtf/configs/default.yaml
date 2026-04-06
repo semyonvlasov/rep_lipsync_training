@@ -1,0 +1,22 @@
+stage: fetch_hdtf_public_to_gdrive
+
+runtime:
+  python_bin: python3
+
+gdrive:
+  remote: "gdrive:"
+  raw:
+    url: "https://drive.google.com/drive/folders/1v06momk8fR-eqw79Z93zczBx_InWsCS9?usp=drive_link"
+    folder_id: "1v06momk8fR-eqw79Z93zczBx_InWsCS9"
+
+paths:
+  processing_folder: training/data/hdtf
+  raw_archives_folder: training/data/hdtf/archives_raw_batches
+  log_folder: training/output/dataset_prepare/fetch_hdtf
+
+fetch:
+  max_videos: 0
+  target_size_gb: 0
+  download_max_height: 720
+  batch_size_gb: 1.0
+  max_batches: 0

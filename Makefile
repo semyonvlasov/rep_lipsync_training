@@ -25,6 +25,8 @@ REMOTE_TORCHAUDIO_VERSION ?= 2.10.0
 REMOTE_TORCH_INDEX_URL ?= https://download.pytorch.org/whl/cu128
 
 SERVER_PY_REQUIREMENTS := $(TRAINING_ROOT)/requirements-server.txt
+FETCH_VENV ?= $(REPO_ROOT)/.venv-fetch
+PROCESS_PREWARM_SFD ?= 1
 
 SMOKE_LAZY_WORKFLOW ?= workflows/train/run_lazy_smoke_remote_20260325.sh
 SYNCNET_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
@@ -114,10 +116,13 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
+	@echo "  make bootstrap-fetch # install local fetch deps on macOS or Debian/Ubuntu and create $(FETCH_VENV)"
+	@echo "  make bootstrap-process-lazy # install local raw->lazy processing deps on Debian/Ubuntu and prewarm SFD"
+	@echo "  make remote-bootstrap-process-lazy # prepare a remote Linux box for raw->lazy processing over SSH"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
 	@echo "  make remote-sync-code # clone/pull the latest repo on a remote box and sync the official SyncNet checkpoint"
 	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box and verify torch/CUDA compatibility"
@@ -126,7 +131,6 @@ help:
 	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
 	@echo "  make remote-observe-system # start the remote system observer"
 	@echo "  make remote-bootstrap # sync code, install deps, and start the remote observer"
-	@echo "  make remote-faceclip-bootstrap # prepare a remote box for raw->lazy faceclip processing (SFD + ffmpeg + rclone)"
 	@echo "  make remote-faceclip-start # launch raw->lazy faceclip processing on a remote and auto-register it in the local monitor"
 	@echo "  make faceclip-monitor-daemon-start # keep combined_status.log refreshed in the background"
 	@echo "  make faceclip-monitor-daemon-stop # stop the local faceclip monitor daemon"
@@ -182,14 +186,66 @@ help:
 	@echo "  ARTIFACTS_RUN_KIND=syncnet|generator|pipeline|smoke|auto"
 	@echo "  ARTIFACTS_RUN_NAME=<drive_subdir_name>"
 	@echo "  ARTIFACTS_CONFIG_PATH=training/configs/<config>.yaml"
+	@echo "  FETCH_VENV=$(REPO_ROOT)/.venv-fetch"
+	@echo ""
+	@echo "Bootstrap examples:"
+	@echo "  make bootstrap-fetch"
+	@echo "  ssh -p 24380 root@ssh9.vast.ai 'cd /root/lipsync_test/rep_lipsync_training && make bootstrap-fetch PYTHON=python3'"
+	@echo "  make remote-rclone-config REMOTE=root@ssh9.vast.ai PORT=24380"
+	@echo "  ssh -p 24380 root@ssh9.vast.ai 'cd /root/lipsync_test/rep_lipsync_training && make bootstrap-process-lazy PYTHON=python3'"
+	@echo "  make remote-bootstrap-process-lazy REMOTE=root@ssh9.vast.ai PORT=24380 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training REMOTE_PYTHON=python3"
+
+bootstrap-fetch:
+	@set -euo pipefail; \
+	os="$$(uname -s)"; \
+	if [ "$$os" = "Darwin" ]; then \
+		if ! command -v brew >/dev/null 2>&1; then \
+			echo "bootstrap-fetch requires Homebrew on macOS"; \
+			exit 1; \
+		fi; \
+		brew install ffmpeg rclone python; \
+	elif command -v apt-get >/dev/null 2>&1; then \
+		sudo_cmd=""; \
+		if [ "$$(id -u)" -ne 0 ]; then \
+			sudo_cmd="sudo"; \
+		fi; \
+		$$sudo_cmd apt-get update; \
+		DEBIAN_FRONTEND=noninteractive $$sudo_cmd apt-get install -y ffmpeg libsndfile1 rclone git curl make python3 python3-venv; \
+	else \
+		echo "bootstrap-fetch supports macOS/Homebrew and Debian/Ubuntu apt-get only"; \
+		exit 1; \
+	fi; \
+	if [ ! -d "$(FETCH_VENV)" ]; then \
+		$(PYTHON) -m venv "$(FETCH_VENV)"; \
+	fi; \
+	"$(FETCH_VENV)/bin/python" -m pip install --upgrade pip; \
+	"$(FETCH_VENV)/bin/python" -m pip install --no-cache-dir -r "$(SERVER_PY_REQUIREMENTS)" yt-dlp; \
+	"$(FETCH_VENV)/bin/yt-dlp" --version >/dev/null; \
+	rclone version >/dev/null; \
+	ffmpeg -version >/dev/null; \
+	echo "bootstrap-fetch complete"; \
+	echo "activate with: source $(FETCH_VENV)/bin/activate"
+
+bootstrap-process-lazy: server-setup
+	@if [ "$(PROCESS_PREWARM_SFD)" = "1" ]; then \
+		cd "$(TRAINING_ROOT)"; \
+		PYTHONPATH="$(REPO_ROOT)/models/official_syncnet:$(TRAINING_ROOT):$(REPO_ROOT)" \
+			$(PYTHON) -c "from face_detection import FaceAlignment, LandmarksType; FaceAlignment(LandmarksType._2D, device='cpu', flip_input=False, face_detector='sfd'); print('SFD checkpoint cached')"; \
+	fi
+	@echo "bootstrap-process-lazy complete"
 
 server-setup:
-	@if ! command -v apt-get >/dev/null 2>&1; then \
+	@set -euo pipefail; \
+	if ! command -v apt-get >/dev/null 2>&1; then \
 		echo "server-setup is intended for Ubuntu/Debian training servers with apt-get"; \
 		exit 1; \
-	fi
-	apt-get update
-	DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg libsndfile1 rsync rclone git make
+	fi; \
+	sudo_cmd=""; \
+	if [ "$$(id -u)" -ne 0 ]; then \
+		sudo_cmd="sudo"; \
+	fi; \
+	$$sudo_cmd apt-get update; \
+	DEBIAN_FRONTEND=noninteractive $$sudo_cmd apt-get install -y ffmpeg libsndfile1 rsync rclone git make python3-pip
 	$(PIP) install --upgrade pip
 	$(PIP) install --no-cache-dir -r $(SERVER_PY_REQUIREMENTS)
 	@if [ "$(REMOTE_ENSURE_TORCH_CUDA)" = "1" ]; then \
@@ -218,8 +274,12 @@ remote-server-setup:
 			echo 'remote-server-setup is intended for Ubuntu/Debian training servers with apt-get'; \
 			exit 1; \
 		fi; \
-		apt-get update; \
-		DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg libsndfile1 rsync rclone git make python3-pip; \
+		sudo_cmd=''; \
+		if [ \"\$$(id -u)\" -ne 0 ]; then \
+			sudo_cmd='sudo'; \
+		fi; \
+		\$$sudo_cmd apt-get update; \
+		DEBIAN_FRONTEND=noninteractive \$$sudo_cmd apt-get install -y ffmpeg libsndfile1 rsync rclone git make python3-pip; \
 		$(REMOTE_PYTHON) -m pip install --upgrade pip; \
 		$(REMOTE_PYTHON) -m pip install --no-cache-dir -r '$(REMOTE_ROOT)/training/requirements-server.txt'; \
 		if [ '$(REMOTE_ENSURE_TORCH_CUDA)' = '1' ]; then \
@@ -298,9 +358,9 @@ remote-observe-system:
 remote-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remote-fetch-official-syncnet remote-observe-system
 	@echo "remote-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
 
-remote-faceclip-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd
+remote-bootstrap-process-lazy: remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd
 	-@$(MAKE) remote-observe-system REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" SYSTEM_WATCH_INTERVAL="$(SYSTEM_WATCH_INTERVAL)"
-	@echo "remote-faceclip-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
+	@echo "remote-bootstrap-process-lazy complete: $(REMOTE):$(REMOTE_ROOT)"
 
 remote-faceclip-register:
 	@mkdir -p "$(FACECLIP_MONITOR_DIR)"

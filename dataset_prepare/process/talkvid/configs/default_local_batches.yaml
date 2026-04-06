@@ -1,0 +1,30 @@
+extends: ../../configs/common.yaml
+stage: process_talkvid_local_batches
+
+runtime:
+  python_bin: /opt/homebrew/Caskroom/miniforge/base/envs/musetalk/bin/python
+  ffmpeg_threads: 1
+
+paths:
+  batches_folder: training/data/talkvid_local/batches
+  processing_folder: training/data/talkvid_local/faceclip_pipeline
+  manifest_path: training/output/talkvid_local_cycle/processed_batch_manifest.jsonl
+  producer_done_flag: training/output/talkvid_local_cycle/fetch_done.flag
+
+local_batches:
+  follow: true
+  poll_seconds: 20
+  max_batches: 0
+
+process:
+  faceclip_size: 256
+  processed_fps: 25
+  max_frames: 750
+  detect_every: 10
+  smooth_window: 9
+  detector_backend: opencv
+  detector_device: auto
+  detector_batch_size: 4
+  resize_device: cpu
+  normalized_video_bitrate: 15m
+  processed_video_bitrate: 420k

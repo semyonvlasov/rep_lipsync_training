@@ -1,0 +1,17 @@
+# Shared process defaults used by source-specific service launchers.
+
+runtime:
+  python_bin: python3
+  ffmpeg_bin: ""
+  ffmpeg_threads: 4
+  ffmpeg_timeout: 180
+  video_encoder: auto
+
+gdrive:
+  remote: "gdrive:"
+  raw:
+    url: "https://drive.google.com/drive/folders/1v06momk8fR-eqw79Z93zczBx_InWsCS9?usp=drive_link"
+    folder_id: "1v06momk8fR-eqw79Z93zczBx_InWsCS9"
+  processed:
+    url: "https://drive.google.com/drive/folders/1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n?usp=drive_link"
+    folder_id: "1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n"

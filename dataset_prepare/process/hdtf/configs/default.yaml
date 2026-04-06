@@ -1,0 +1,6 @@
+extends: ../../configs/process_raw_archives_to_lazy_faceclips_gdrive.yaml
+stage: process_hdtf_raw_from_gdrive
+
+process:
+  archive_glob: "*hdtf*.tar"
+  normalized_video_bitrate: 2200k
