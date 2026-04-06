@@ -4,8 +4,8 @@ extends: common.yaml
 stage: process_raw_archives_to_lazy_faceclips_gdrive
 
 paths:
-  processing_folder: training/data/raw_faceclips_x288_cycle
-  manifest_path: training/output/raw_faceclips_x288_cycle/archive_manifest.jsonl
+  processing_folder: data/dataset_prepare/process/raw_faceclips_x288_cycle
+  manifest_path: data/dataset_prepare/process/raw_faceclips_x288_cycle/archive_manifest.jsonl
 
 process:
   max_archives: 0

@@ -93,9 +93,23 @@ def unlink_if_matching(path: Path, size_bytes: object = None, mtime_ns: object =
         return False
 
 
-def cleanup_uploaded_files(raw_dir: Path, files: list[str], file_entries: list[dict], tar_path: Path) -> tuple[int, int]:
+def cleanup_uploaded_files(
+    raw_dir: Path | None, files: list[str], file_entries: list[dict], tar_path: Path
+) -> tuple[int, int]:
     cleaned = 0
     skipped = 0
+
+    if raw_dir is None:
+        log(
+            f"[Upload] no raw_dir available for {tar_path.name}; "
+            "skipping local source cleanup and removing only the tar archive"
+        )
+        try:
+            if tar_path.exists():
+                tar_path.unlink()
+        except OSError:
+            pass
+        return cleaned, skipped
 
     if file_entries:
         for entry in file_entries:
@@ -147,7 +161,11 @@ def cleanup_batch_root(batch_root: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--raw-dir", required=True)
+    parser.add_argument(
+        "--raw-dir",
+        default="",
+        help="Legacy fallback raw directory used only when a batch manifest entry lacks raw_dir",
+    )
     parser.add_argument("--archives-dir", required=True)
     parser.add_argument("--remote", default="gdrive:")
     parser.add_argument("--drive-root-folder-id", required=True)
@@ -156,7 +174,7 @@ def main() -> int:
     parser.add_argument("--rclone-transfers", type=int, default=1)
     args = parser.parse_args()
 
-    raw_dir = Path(args.raw_dir)
+    raw_dir = Path(args.raw_dir) if args.raw_dir else None
     archives_dir = Path(args.archives_dir)
     batches_manifest = archives_dir / "batches_manifest.jsonl"
     uploaded_manifest = Path(args.uploaded_manifest) if args.uploaded_manifest else (archives_dir / "uploaded_manifest.jsonl")
@@ -174,14 +192,15 @@ def main() -> int:
             continue
         pending.append(batch)
 
-    log(f"[Upload] raw_dir={raw_dir}")
+    log(f"[Upload] raw_dir={raw_dir if raw_dir is not None else '<manifest_only>'}")
     log(f"[Upload] archives_dir={archives_dir}")
     log(f"[Upload] pending_batches={len(pending)}")
 
     uploaded_count = 0
     for batch in pending:
         tar_path = Path(str(batch["tar_path"]))
-        batch_raw_dir = Path(str(batch.get("raw_dir") or args.raw_dir))
+        batch_raw_dir_value = batch.get("raw_dir")
+        batch_raw_dir = Path(str(batch_raw_dir_value)) if batch_raw_dir_value else raw_dir
         batch_root = batch.get("batch_root")
         remote_name = tar_path.name
         cmd = [

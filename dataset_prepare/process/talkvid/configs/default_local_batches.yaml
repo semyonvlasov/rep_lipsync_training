@@ -6,10 +6,10 @@ runtime:
   ffmpeg_threads: 1
 
 paths:
-  batches_folder: training/data/talkvid_local/batches
-  processing_folder: training/data/talkvid_local/faceclip_pipeline
-  manifest_path: training/output/talkvid_local_cycle/processed_batch_manifest.jsonl
-  producer_done_flag: training/output/talkvid_local_cycle/fetch_done.flag
+  batches_folder: data/dataset_prepare/fetch/talkvid/batches
+  processing_folder: data/dataset_prepare/process/talkvid_local_batches
+  manifest_path: data/dataset_prepare/process/talkvid_local_batches/processed_batch_manifest.jsonl
+  producer_done_flag: data/dataset_prepare/fetch/talkvid/fetch_done.flag
 
 local_batches:
   follow: true

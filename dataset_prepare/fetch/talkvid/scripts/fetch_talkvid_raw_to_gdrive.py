@@ -2,7 +2,8 @@
 """Fetch raw TalkVid clips, package raw tar batches, and upload them to Drive.
 
 Supports CLI-only batch numbering overrides via `--resume-batch` and
-`--start-from-batch`.
+`--start-from-batch`, plus metadata-position override via
+`--start-after-clip-id`.
 """
 
 from __future__ import annotations
@@ -61,6 +62,14 @@ def parse_args(default_config: Path) -> argparse.Namespace:
         "--start-from-batch",
         type=parse_batch_name,
         help="Start a new numbering sequence from a specific batch id like 0035.",
+    )
+    parser.add_argument(
+        "--start-after-clip-id",
+        default="",
+        help=(
+            "Skip metadata items through this TalkVid clip id and start downloading "
+            "from the next metadata item."
+        ),
     )
     return parser.parse_args()
 
@@ -172,7 +181,6 @@ def package_batch_root(
 def launch_uploader(
     python_bin: str,
     script_dir: Path,
-    raw_dir: Path,
     archives_dir: Path,
     gdrive_remote: str,
     raw_folder_id: str,
@@ -181,8 +189,6 @@ def launch_uploader(
     cmd = [
         python_bin,
         str(script_dir / "upload_batches_and_cleanup.py"),
-        "--raw-dir",
-        str(raw_dir),
         "--archives-dir",
         str(archives_dir),
         "--remote",
@@ -222,6 +228,7 @@ def launch_fetch(
     cookies_from_browser: str,
     cookies_rotate_every_successes: int,
     download_jobs: int,
+    start_after_clip_id: str,
     log_fp: object | None,
 ) -> subprocess.Popen[bytes]:
     cmd = [
@@ -270,6 +277,8 @@ def launch_fetch(
         cmd.extend(["--cookies-from-browser", cookies_from_browser])
     else:
         cmd.extend(["--cookies-file", cookies_file])
+    if start_after_clip_id:
+        cmd.extend(["--start-after-clip-id", start_after_clip_id])
     cmd.extend(["--jobs", str(download_jobs)])
     log(f"[download_live] {format_cmd(cmd)}", log_fp=log_fp)
     proc = subprocess.Popen(cmd, stdout=log_fp, stderr=subprocess.STDOUT)
@@ -296,12 +305,10 @@ def main() -> int:
 
         data_root = workspace_root
         archives_dir = workspace_root / "archives"
-        raw_dir = data_root / "raw"
         batch_runs_dir = data_root / "batches"
         global_manifest = data_root / "download_manifest.jsonl"
         batch_counter_file = data_root / "next_fetch_batch_index.txt"
 
-        raw_dir.mkdir(parents=True, exist_ok=True)
         batch_runs_dir.mkdir(parents=True, exist_ok=True)
         archives_dir.mkdir(parents=True, exist_ok=True)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -346,6 +353,11 @@ def main() -> int:
                 log(f"[cycle] cli_resume_batch={args.resume_batch}", log_fp=log_fp)
             if args.start_from_batch is not None:
                 log(f"[cycle] cli_start_from_batch={args.start_from_batch}", log_fp=log_fp)
+            if args.start_after_clip_id:
+                log(
+                    f"[cycle] cli_start_after_clip_id={args.start_after_clip_id}",
+                    log_fp=log_fp,
+                )
             log(
                 "[cycle] "
                 f"remote={gdrive_remote} batch_gb={batch_gb} "
@@ -375,7 +387,6 @@ def main() -> int:
             upload_proc: subprocess.Popen[bytes] | None = launch_uploader(
                 python_bin,
                 paths.script_dir,
-                raw_dir,
                 archives_dir,
                 gdrive_remote,
                 raw_folder_id,
@@ -430,6 +441,7 @@ def main() -> int:
                     cookies_from_browser=cookies_from_browser,
                     cookies_rotate_every_successes=cookies_rotate_every_successes,
                     download_jobs=download_jobs,
+                    start_after_clip_id=args.start_after_clip_id,
                     log_fp=log_fp,
                 )
                 download_rc = fetch_proc.wait()
@@ -444,7 +456,6 @@ def main() -> int:
                     upload_proc = launch_uploader(
                         python_bin,
                         paths.script_dir,
-                        raw_dir,
                         archives_dir,
                         gdrive_remote,
                         raw_folder_id,
@@ -475,8 +486,6 @@ def main() -> int:
             tail_cmd = [
                 python_bin,
                 str(paths.script_dir / "upload_batches_and_cleanup.py"),
-                "--raw-dir",
-                str(raw_dir),
                 "--archives-dir",
                 str(archives_dir),
                 "--remote",

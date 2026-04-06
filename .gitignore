@@ -16,6 +16,8 @@ training/data/talkvid/
 training/data/talkvid_local/
 training/data/talkvid_remote/
 training/data/faceclip_local/
+data/*
+!data/.gitkeep
 
 models/official_syncnet/checkpoints/*.pth
 models/official_syncnet/checkpoints/*.pt

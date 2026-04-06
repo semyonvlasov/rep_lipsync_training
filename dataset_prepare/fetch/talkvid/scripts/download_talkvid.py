@@ -466,6 +466,14 @@ def build_argparser() -> argparse.ArgumentParser:
         default=[],
         help="JSONL manifest(s) containing completed clip ids or packaged filenames to skip",
     )
+    parser.add_argument(
+        "--start-after-clip-id",
+        default="",
+        help=(
+            "Skip metadata items through this TalkVid clip id and start downloading "
+            "from the next metadata item."
+        ),
+    )
     parser.add_argument("--delay-seconds", type=int, default=0)
     parser.add_argument("--cookies-file", default=os.environ.get("YTDLP_COOKIES_FILE"))
     parser.add_argument("--cookies-from-browser", default=os.environ.get("YTDLP_COOKIES_FROM_BROWSER"))
@@ -545,6 +553,8 @@ def main() -> int:
     log(f"[TalkVid] rate_limit_cooldown_seconds={args.rate_limit_cooldown_seconds}")
     log(f"[TalkVid] max_rate_limit_cooldowns={args.max_rate_limit_cooldowns}")
     log(f"[TalkVid] cookies_rotate_every_successes={rotate_every_successes}")
+    if args.start_after_clip_id:
+        log(f"[TalkVid] start_after_clip_id={args.start_after_clip_id}")
     if args.cookies_from_browser:
         log(f"[TalkVid] cookies_from_browser={args.cookies_from_browser}")
     if args.cookies_file:
@@ -573,6 +583,9 @@ def main() -> int:
     bot_check_notice_sent = False
     rate_limit_notice_sent = False
     current_cookie_label: Optional[str] = None
+    waiting_for_start_after = bool(args.start_after_clip_id)
+    start_after_found = not waiting_for_start_after
+    skipped_before_start = 0
 
     def log_result(
         attempt_index: int,
@@ -680,6 +693,18 @@ def main() -> int:
                         break
 
                     item_id = clip_id(item)
+                    if waiting_for_start_after:
+                        skipped_before_start += 1
+                        if item_id == args.start_after_clip_id:
+                            waiting_for_start_after = False
+                            start_after_found = True
+                            log(
+                                f"[TalkVid] matched start_after_clip_id={args.start_after_clip_id}; "
+                                f"starting from the next metadata item "
+                                f"(skipped_prefix_items={skipped_before_start})"
+                            )
+                        continue
+
                     video_key = video_key_for_item(item)
                     if not clip_allowed(item, args):
                         filtered_out += 1
@@ -770,6 +795,10 @@ def main() -> int:
     except KeyboardInterrupt:
         interrupted = True
         log("[TalkVid] Interrupted externally; keeping already downloaded files for resume")
+
+    if not start_after_found:
+        log(f"[TalkVid] ERROR: start_after_clip_id not found: {args.start_after_clip_id}")
+        return 2
 
     final_raw_bytes = get_dir_size_bytes(raw_dir)
     log(

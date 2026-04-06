@@ -10,8 +10,8 @@ gdrive:
     folder_id: "1v06momk8fR-eqw79Z93zczBx_InWsCS9"
 
 paths:
-  workspace_root: training/data/hdtf
-  log_folder: output/dataset_prepare/fetch_hdtf
+  workspace_root: data/dataset_prepare/fetch/hdtf
+  log_folder: data/dataset_prepare/fetch/hdtf/logs
 
 fetch:
   # Max raw videos to download from the HDTF annotation lists (0 = no explicit count limit).

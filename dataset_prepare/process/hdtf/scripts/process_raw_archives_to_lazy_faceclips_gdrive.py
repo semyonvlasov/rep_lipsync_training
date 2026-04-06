@@ -522,10 +522,10 @@ def main() -> int:
     parser.add_argument("--source-folder-id", default=DEFAULT_SOURCE_FOLDER_ID)
     parser.add_argument("--dest-folder-id", default=DEFAULT_DEST_FOLDER_ID)
     parser.add_argument("--remote", default="gdrive:")
-    parser.add_argument("--data-root", default="training/data/raw_faceclips_x288_cycle")
+    parser.add_argument("--data-root", default="data/dataset_prepare/process/raw_faceclips_x288_cycle")
     parser.add_argument(
         "--manifest-path",
-        default="training/output/raw_faceclips_x288_cycle/archive_manifest.jsonl",
+        default="data/dataset_prepare/process/raw_faceclips_x288_cycle/archive_manifest.jsonl",
     )
     parser.add_argument("--archive-glob", default="*.tar")
     parser.add_argument("--max-archives", type=int, default=0, help="0=all pending")
