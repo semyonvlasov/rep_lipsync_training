@@ -55,7 +55,9 @@ def log(msg: str) -> None:
 
 def load_official_wav2lip_classes():
     candidate_roots = [
+        Path(REPO_ROOT) / "models" / "official_syncnet",
         Path(REPO_ROOT) / "models" / "wav2lip",
+        Path(REPO_ROOT).parent / "rep_lipsync_training" / "models" / "official_syncnet",
         Path(REPO_ROOT).parent / "models" / "wav2lip",
     ]
     for root in candidate_roots:
@@ -259,16 +261,183 @@ def save_sample_images(x, g, gt, step: int, checkpoint_dir: str) -> None:
             cv2.imwrite(os.path.join(folder, f"{batch_idx}_{t}.jpg"), sample[t])
 
 
-def save_checkpoint(model, optimizer, step: int, checkpoint_dir: str, epoch: int, save_optimizer_state: bool, prefix: str = ""):
-    checkpoint_path = os.path.join(checkpoint_dir, f"{prefix}checkpoint_step{step:09d}.pth")
+def better_official_eval(
+    candidate_sync,
+    candidate_l1,
+    candidate_step,
+    best_sync,
+    best_l1,
+    best_step,
+    eps=1.0e-8,
+):
+    if candidate_sync < best_sync - eps:
+        return True
+    if abs(candidate_sync - best_sync) <= eps:
+        if candidate_l1 < best_l1 - eps:
+            return True
+        if abs(candidate_l1 - best_l1) <= eps and (best_step is None or candidate_step > best_step):
+            return True
+    return False
+
+
+def better_scalar_metric(
+    candidate_value,
+    candidate_step,
+    best_value,
+    best_step,
+    candidate_secondary=None,
+    best_secondary=None,
+    eps=1.0e-8,
+):
+    if candidate_value < best_value - eps:
+        return True
+    if abs(candidate_value - best_value) <= eps:
+        if candidate_secondary is not None:
+            ref_secondary = float("inf") if best_secondary is None else best_secondary
+            if candidate_secondary < ref_secondary - eps:
+                return True
+            if abs(candidate_secondary - ref_secondary) <= eps and (best_step is None or candidate_step > best_step):
+                return True
+        elif best_step is None or candidate_step > best_step:
+            return True
+    return False
+
+
+def build_best_evals_payload(
+    *,
+    off_sync=None,
+    off_l1=None,
+    off_perceptual=None,
+    off_step=None,
+    l1_value=None,
+    l1_sync=None,
+    l1_perceptual=None,
+    l1_step=None,
+    perceptual_value=None,
+    perceptual_sync=None,
+    perceptual_l1=None,
+    perceptual_step=None,
+):
+    payload = {}
+    if off_step is not None:
+        payload["off"] = {
+            "sync": float(off_sync),
+            "l1": float(off_l1),
+            "perceptual": None if off_perceptual is None else float(off_perceptual),
+            "step": int(off_step),
+        }
+    if l1_step is not None:
+        payload["l1"] = {
+            "l1": float(l1_value),
+            "sync": None if l1_sync is None else float(l1_sync),
+            "perceptual": None if l1_perceptual is None else float(l1_perceptual),
+            "step": int(l1_step),
+        }
+    if perceptual_step is not None:
+        payload["perceptual"] = {
+            "perceptual": float(perceptual_value),
+            "sync": None if perceptual_sync is None else float(perceptual_sync),
+            "l1": None if perceptual_l1 is None else float(perceptual_l1),
+            "step": int(perceptual_step),
+        }
+    return payload
+
+
+def extract_best_evals_from_checkpoint(ck):
+    payload = ck.get("best_evals")
+    if isinstance(payload, dict):
+        return payload
+
+    legacy = {}
+    if ck.get("best_off_eval_step") is not None:
+        legacy["off"] = {
+            "sync": float(ck["best_off_eval_sync"]),
+            "l1": float(ck["best_off_eval_l1"]),
+            "perceptual": None if ck.get("best_off_eval_perceptual") is None else float(ck["best_off_eval_perceptual"]),
+            "step": int(ck["best_off_eval_step"]),
+        }
+    if ck.get("best_l1_eval_step") is not None:
+        legacy["l1"] = {
+            "l1": float(ck["best_l1_eval_l1"]),
+            "sync": None if ck.get("best_l1_eval_sync") is None else float(ck["best_l1_eval_sync"]),
+            "perceptual": None if ck.get("best_l1_eval_perceptual") is None else float(ck["best_l1_eval_perceptual"]),
+            "step": int(ck["best_l1_eval_step"]),
+        }
+    if ck.get("best_perceptual_eval_step") is not None:
+        legacy["perceptual"] = {
+            "perceptual": float(ck["best_perceptual_eval_perceptual"]),
+            "sync": None if ck.get("best_perceptual_eval_sync") is None else float(ck["best_perceptual_eval_sync"]),
+            "l1": None if ck.get("best_perceptual_eval_l1") is None else float(ck["best_perceptual_eval_l1"]),
+            "step": int(ck["best_perceptual_eval_step"]),
+        }
+    return legacy
+
+
+def build_checkpoint_payload(model, optimizer, step: int, epoch: int, save_optimizer_state: bool, best_evals=None):
     optimizer_state = optimizer.state_dict() if (optimizer is not None and save_optimizer_state) else None
+    checkpoint = {
+        "state_dict": model.state_dict(),
+        "optimizer": optimizer_state,
+        "global_step": int(step),
+        "global_epoch": int(epoch),
+    }
+    if best_evals:
+        checkpoint["best_evals"] = best_evals
+        off_eval = best_evals.get("off")
+        if off_eval is not None:
+            checkpoint["best_off_eval_sync"] = float(off_eval["sync"])
+            checkpoint["best_off_eval_l1"] = float(off_eval["l1"])
+            checkpoint["best_off_eval_perceptual"] = (
+                None if off_eval.get("perceptual") is None else float(off_eval["perceptual"])
+            )
+            checkpoint["best_off_eval_step"] = int(off_eval["step"])
+        l1_eval = best_evals.get("l1")
+        if l1_eval is not None:
+            checkpoint["best_l1_eval_l1"] = float(l1_eval["l1"])
+            checkpoint["best_l1_eval_sync"] = (
+                None if l1_eval.get("sync") is None else float(l1_eval["sync"])
+            )
+            checkpoint["best_l1_eval_perceptual"] = (
+                None if l1_eval.get("perceptual") is None else float(l1_eval["perceptual"])
+            )
+            checkpoint["best_l1_eval_step"] = int(l1_eval["step"])
+        perceptual_eval = best_evals.get("perceptual")
+        if perceptual_eval is not None:
+            checkpoint["best_perceptual_eval_perceptual"] = float(perceptual_eval["perceptual"])
+            checkpoint["best_perceptual_eval_sync"] = (
+                None if perceptual_eval.get("sync") is None else float(perceptual_eval["sync"])
+            )
+            checkpoint["best_perceptual_eval_l1"] = (
+                None if perceptual_eval.get("l1") is None else float(perceptual_eval["l1"])
+            )
+            checkpoint["best_perceptual_eval_step"] = int(perceptual_eval["step"])
+    return checkpoint
+
+
+def save_checkpoint(
+    model,
+    optimizer,
+    step: int,
+    checkpoint_dir: str,
+    epoch: int,
+    save_optimizer_state: bool,
+    prefix: str = "",
+    filename: str | None = None,
+    best_evals=None,
+):
+    checkpoint_path = os.path.join(
+        checkpoint_dir,
+        filename if filename is not None else f"{prefix}checkpoint_step{step:09d}.pth",
+    )
     torch.save(
-        {
-            "state_dict": model.state_dict(),
-            "optimizer": optimizer_state,
-            "global_step": step,
-            "global_epoch": epoch,
-        },
+        build_checkpoint_payload(
+            model,
+            optimizer,
+            step,
+            epoch,
+            save_optimizer_state,
+            best_evals=best_evals,
+        ),
         checkpoint_path,
     )
     print(f"Saved checkpoint: {checkpoint_path}", flush=True)
@@ -299,7 +468,7 @@ def load_checkpoint(path: str, model, optimizer, reset_optimizer: bool = False, 
     return model
 
 
-def eval_model(test_data_loader, device, model, disc, syncnet, cfg_mirror: dict) -> float:
+def eval_model(test_data_loader, device, model, disc, syncnet, cfg_mirror: dict) -> dict[str, float]:
     eval_steps = int(cfg_mirror["eval_steps"])
     print(f"Evaluating for {eval_steps} steps", flush=True)
     running_sync_loss = []
@@ -342,17 +511,24 @@ def eval_model(test_data_loader, device, model, disc, syncnet, cfg_mirror: dict)
             if step > eval_steps:
                 break
 
+        metrics = {
+            "l1": sum(running_l1_loss) / len(running_l1_loss),
+            "sync": sum(running_sync_loss) / len(running_sync_loss),
+            "perceptual": sum(running_perceptual_loss) / len(running_perceptual_loss),
+            "disc_fake": sum(running_disc_fake_loss) / len(running_disc_fake_loss),
+            "disc_real": sum(running_disc_real_loss) / len(running_disc_real_loss),
+        }
         print(
             "L1: {}, Sync: {}, Percep: {} | Fake: {}, Real: {}".format(
-                sum(running_l1_loss) / len(running_l1_loss),
-                sum(running_sync_loss) / len(running_sync_loss),
-                sum(running_perceptual_loss) / len(running_perceptual_loss),
-                sum(running_disc_fake_loss) / len(running_disc_fake_loss),
-                sum(running_disc_real_loss) / len(running_disc_real_loss),
+                metrics["l1"],
+                metrics["sync"],
+                metrics["perceptual"],
+                metrics["disc_fake"],
+                metrics["disc_real"],
             ),
             flush=True,
         )
-        return sum(running_sync_loss) / len(running_sync_loss)
+        return metrics
 
 
 def resolve_mirror_cfg(cfg: dict) -> dict:
@@ -366,6 +542,8 @@ def resolve_mirror_cfg(cfg: dict) -> dict:
         "disc_lr": float(section.get("disc_lr", section.get("lr", generator_cfg.get("lr", 1.0e-4)))),
         "betas": tuple(section.get("betas", generator_cfg.get("gan_betas", (0.5, 0.999)))),
         "checkpoint_interval_steps": int(section.get("checkpoint_interval_steps", 3000)),
+        "sample_interval_steps": int(section.get("sample_interval_steps", 0)),
+        "save_sample_images": bool(section.get("save_sample_images", False)),
         "eval_interval_steps": int(section.get("eval_interval_steps", 3000)),
         "eval_steps": int(section.get("eval_steps", 300)),
         "save_optimizer_state": bool(section.get("save_optimizer_state", True)),
@@ -382,13 +560,117 @@ def resolve_mirror_cfg(cfg: dict) -> dict:
     return resolved
 
 
-def train(device, model, disc, syncnet, train_data_loader, test_data_loader, optimizer, disc_optimizer, checkpoint_dir: str, cfg_mirror: dict):
+def train(
+    device,
+    model,
+    disc,
+    syncnet,
+    train_data_loader,
+    test_data_loader,
+    optimizer,
+    disc_optimizer,
+    checkpoint_dir: str,
+    cfg_mirror: dict,
+    initial_best_evals=None,
+):
     global global_step
     global global_epoch
 
     syncnet_wt = float(cfg_mirror["syncnet_wt_initial"])
     resumed_step = global_step
     recon_loss = nn.L1Loss()
+    restored_best_evals = initial_best_evals or {}
+    off_eval = restored_best_evals.get("off")
+    l1_eval = restored_best_evals.get("l1")
+    perceptual_eval = restored_best_evals.get("perceptual")
+
+    best_off_eval_sync = float(off_eval["sync"]) if off_eval is not None else float("inf")
+    best_off_eval_l1 = float(off_eval["l1"]) if off_eval is not None else float("inf")
+    best_off_eval_perceptual = (
+        float(off_eval["perceptual"]) if (off_eval is not None and off_eval.get("perceptual") is not None) else float("inf")
+    )
+    best_off_eval_step = int(off_eval["step"]) if off_eval is not None else None
+
+    best_l1_eval_l1 = float(l1_eval["l1"]) if l1_eval is not None else float("inf")
+    best_l1_eval_sync = (
+        float(l1_eval["sync"]) if (l1_eval is not None and l1_eval.get("sync") is not None) else float("inf")
+    )
+    best_l1_eval_perceptual = (
+        float(l1_eval["perceptual"]) if (l1_eval is not None and l1_eval.get("perceptual") is not None) else float("inf")
+    )
+    best_l1_eval_step = int(l1_eval["step"]) if l1_eval is not None else None
+
+    best_perceptual_eval_perceptual = (
+        float(perceptual_eval["perceptual"]) if perceptual_eval is not None else float("inf")
+    )
+    best_perceptual_eval_sync = (
+        float(perceptual_eval["sync"])
+        if (perceptual_eval is not None and perceptual_eval.get("sync") is not None)
+        else float("inf")
+    )
+    best_perceptual_eval_l1 = (
+        float(perceptual_eval["l1"])
+        if (perceptual_eval is not None and perceptual_eval.get("l1") is not None)
+        else float("inf")
+    )
+    best_perceptual_eval_step = int(perceptual_eval["step"]) if perceptual_eval is not None else None
+
+    latest_ckpt_path = os.path.join(checkpoint_dir, "generator_latest.pth")
+    disc_latest_ckpt_path = os.path.join(checkpoint_dir, "disc_latest.pth")
+    best_off_eval_ckpt_path = os.path.join(checkpoint_dir, "generator_best_off_eval.pth")
+    disc_best_off_eval_ckpt_path = os.path.join(checkpoint_dir, "disc_best_off_eval.pth")
+    best_l1_eval_ckpt_path = os.path.join(checkpoint_dir, "generator_best_l1_eval.pth")
+    disc_best_l1_eval_ckpt_path = os.path.join(checkpoint_dir, "disc_best_l1_eval.pth")
+    best_perceptual_eval_ckpt_path = os.path.join(checkpoint_dir, "generator_best_perceptual_eval.pth")
+    disc_best_perceptual_eval_ckpt_path = os.path.join(checkpoint_dir, "disc_best_perceptual_eval.pth")
+
+    def current_best_evals_payload():
+        return build_best_evals_payload(
+            off_sync=best_off_eval_sync if best_off_eval_step is not None else None,
+            off_l1=best_off_eval_l1 if best_off_eval_step is not None else None,
+            off_perceptual=best_off_eval_perceptual if best_off_eval_step is not None else None,
+            off_step=best_off_eval_step,
+            l1_value=best_l1_eval_l1 if best_l1_eval_step is not None else None,
+            l1_sync=best_l1_eval_sync if best_l1_eval_step is not None else None,
+            l1_perceptual=best_l1_eval_perceptual if best_l1_eval_step is not None else None,
+            l1_step=best_l1_eval_step,
+            perceptual_value=best_perceptual_eval_perceptual if best_perceptual_eval_step is not None else None,
+            perceptual_sync=best_perceptual_eval_sync if best_perceptual_eval_step is not None else None,
+            perceptual_l1=best_perceptual_eval_l1 if best_perceptual_eval_step is not None else None,
+            perceptual_step=best_perceptual_eval_step,
+        )
+
+    def save_named_checkpoint_pair(generator_filename: str, disc_filename: str):
+        best_evals = current_best_evals_payload()
+        save_checkpoint(
+            model,
+            optimizer,
+            global_step,
+            checkpoint_dir,
+            global_epoch,
+            cfg_mirror["save_optimizer_state"],
+            filename=generator_filename,
+            best_evals=best_evals,
+        )
+        save_checkpoint(
+            disc,
+            disc_optimizer,
+            global_step,
+            checkpoint_dir,
+            global_epoch,
+            cfg_mirror["save_optimizer_state"],
+            filename=disc_filename,
+            best_evals=best_evals,
+        )
+
+    log(f"Named latest checkpoint path: {latest_ckpt_path}")
+    log(f"Named latest discriminator path: {disc_latest_ckpt_path}")
+    log(f"Named best sync checkpoint path: {best_off_eval_ckpt_path}")
+    log(f"Named best sync discriminator path: {disc_best_off_eval_ckpt_path}")
+    log(f"Named best L1 checkpoint path: {best_l1_eval_ckpt_path}")
+    log(f"Named best L1 discriminator path: {disc_best_l1_eval_ckpt_path}")
+    log(f"Named best perceptual checkpoint path: {best_perceptual_eval_ckpt_path}")
+    log(f"Named best perceptual discriminator path: {disc_best_perceptual_eval_ckpt_path}")
 
     while global_epoch < cfg_mirror["epochs"]:
         print(f"Starting Epoch: {global_epoch}", flush=True)
@@ -445,7 +727,11 @@ def train(device, model, disc, syncnet, train_data_loader, test_data_loader, opt
             running_disc_real_loss += disc_real_loss.item()
             running_disc_fake_loss += disc_fake_loss.item()
 
-            if global_step % cfg_mirror["checkpoint_interval_steps"] == 0:
+            if (
+                cfg_mirror["save_sample_images"]
+                and cfg_mirror["sample_interval_steps"] > 0
+                and global_step % cfg_mirror["sample_interval_steps"] == 0
+            ):
                 save_sample_images(x, g, gt, global_step, checkpoint_dir)
 
             global_step += 1
@@ -459,23 +745,7 @@ def train(device, model, disc, syncnet, train_data_loader, test_data_loader, opt
             )
 
             if global_step == 1 or global_step % cfg_mirror["checkpoint_interval_steps"] == 0:
-                save_checkpoint(
-                    model,
-                    optimizer,
-                    global_step,
-                    checkpoint_dir,
-                    global_epoch,
-                    cfg_mirror["save_optimizer_state"],
-                )
-                save_checkpoint(
-                    disc,
-                    disc_optimizer,
-                    global_step,
-                    checkpoint_dir,
-                    global_epoch,
-                    cfg_mirror["save_optimizer_state"],
-                    prefix="disc_",
-                )
+                save_named_checkpoint_pair("generator_latest.pth", "disc_latest.pth")
 
             if (
                 test_data_loader is not None
@@ -483,9 +753,70 @@ def train(device, model, disc, syncnet, train_data_loader, test_data_loader, opt
                 and global_step % cfg_mirror["eval_interval_steps"] == 0
             ):
                 with torch.no_grad():
-                    average_sync_loss = eval_model(test_data_loader, device, model, disc, syncnet, cfg_mirror)
+                    eval_metrics = eval_model(test_data_loader, device, model, disc, syncnet, cfg_mirror)
+                    average_sync_loss = float(eval_metrics["sync"])
+                    average_l1_loss = float(eval_metrics["l1"])
+                    average_perceptual_loss = float(eval_metrics["perceptual"])
                     if average_sync_loss < cfg_mirror["syncnet_enable_threshold"]:
                         syncnet_wt = cfg_mirror["syncnet_wt_target"]
+                    if better_official_eval(
+                        candidate_sync=average_sync_loss,
+                        candidate_l1=average_l1_loss,
+                        candidate_step=global_step,
+                        best_sync=best_off_eval_sync,
+                        best_l1=best_off_eval_l1,
+                        best_step=best_off_eval_step,
+                    ):
+                        best_off_eval_sync = average_sync_loss
+                        best_off_eval_l1 = average_l1_loss
+                        best_off_eval_perceptual = average_perceptual_loss
+                        best_off_eval_step = int(global_step)
+                        save_named_checkpoint_pair("generator_best_off_eval.pth", "disc_best_off_eval.pth")
+                        log(
+                            "New best sync eval: "
+                            f"sync={best_off_eval_sync:.4f} l1={best_off_eval_l1:.4f} "
+                            f"perceptual={best_off_eval_perceptual:.4f} step={best_off_eval_step}"
+                        )
+                    if better_scalar_metric(
+                        candidate_value=average_l1_loss,
+                        candidate_step=global_step,
+                        best_value=best_l1_eval_l1,
+                        best_step=best_l1_eval_step,
+                        candidate_secondary=average_perceptual_loss,
+                        best_secondary=best_l1_eval_perceptual,
+                    ):
+                        best_l1_eval_l1 = average_l1_loss
+                        best_l1_eval_sync = average_sync_loss
+                        best_l1_eval_perceptual = average_perceptual_loss
+                        best_l1_eval_step = int(global_step)
+                        save_named_checkpoint_pair("generator_best_l1_eval.pth", "disc_best_l1_eval.pth")
+                        log(
+                            "New best L1 eval: "
+                            f"l1={best_l1_eval_l1:.4f} sync={best_l1_eval_sync:.4f} "
+                            f"perceptual={best_l1_eval_perceptual:.4f} step={best_l1_eval_step}"
+                        )
+                    if better_scalar_metric(
+                        candidate_value=average_perceptual_loss,
+                        candidate_step=global_step,
+                        best_value=best_perceptual_eval_perceptual,
+                        best_step=best_perceptual_eval_step,
+                        candidate_secondary=average_l1_loss,
+                        best_secondary=best_perceptual_eval_l1,
+                    ):
+                        best_perceptual_eval_perceptual = average_perceptual_loss
+                        best_perceptual_eval_sync = average_sync_loss
+                        best_perceptual_eval_l1 = average_l1_loss
+                        best_perceptual_eval_step = int(global_step)
+                        save_named_checkpoint_pair(
+                            "generator_best_perceptual_eval.pth",
+                            "disc_best_perceptual_eval.pth",
+                        )
+                        log(
+                            "New best perceptual eval: "
+                            f"perceptual={best_perceptual_eval_perceptual:.4f} sync={best_perceptual_eval_sync:.4f} "
+                            f"l1={best_perceptual_eval_l1:.4f} step={best_perceptual_eval_step}"
+                        )
+                    save_named_checkpoint_pair("generator_latest.pth", "disc_latest.pth")
 
             prog_bar.set_description(
                 "L1: {}, Sync: {}, Percep: {} | Fake: {}, Real: {}".format(
@@ -581,7 +912,11 @@ def main():
         betas=cfg_mirror["betas"],
     )
 
+    initial_best_evals = {}
     if args.checkpoint_path is not None:
+        initial_best_evals = extract_best_evals_from_checkpoint(
+            _load_checkpoint(args.checkpoint_path, torch.cuda.is_available())
+        )
         load_checkpoint(args.checkpoint_path, model, optimizer, reset_optimizer=False)
     if args.disc_checkpoint_path is not None:
         load_checkpoint(
@@ -601,7 +936,9 @@ def main():
         f"lr={cfg_mirror['lr']:.2e} disc_lr={cfg_mirror['disc_lr']:.2e} "
         f"sync_wt_initial={cfg_mirror['syncnet_wt_initial']:.4f} "
         f"sync_wt_target={cfg_mirror['syncnet_wt_target']:.4f} "
-        f"disc_wt={cfg_mirror['disc_wt']:.4f}"
+        f"disc_wt={cfg_mirror['disc_wt']:.4f} "
+        f"save_sample_images={cfg_mirror['save_sample_images']} "
+        f"sample_interval_steps={cfg_mirror['sample_interval_steps']}"
     )
     log(
         f"Checkpoint dir: {checkpoint_dir} | train_batches={len(train_data_loader)}"
@@ -619,6 +956,7 @@ def main():
         disc_optimizer,
         checkpoint_dir=checkpoint_dir,
         cfg_mirror=cfg_mirror,
+        initial_best_evals=initial_best_evals,
     )
     print("Generator mirror GAN training complete!", flush=True)
 

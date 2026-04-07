@@ -165,6 +165,100 @@ def better_official_eval(
     return False
 
 
+def better_scalar_metric(
+    candidate_value,
+    candidate_step,
+    best_value,
+    best_step,
+    candidate_secondary=None,
+    best_secondary=None,
+    eps=1.0e-8,
+):
+    if candidate_value < best_value - eps:
+        return True
+    if abs(candidate_value - best_value) <= eps:
+        if candidate_secondary is not None:
+            ref_secondary = float("inf") if best_secondary is None else best_secondary
+            if candidate_secondary < ref_secondary - eps:
+                return True
+            if abs(candidate_secondary - ref_secondary) <= eps:
+                if best_step is None or candidate_step > best_step:
+                    return True
+        elif best_step is None or candidate_step > best_step:
+            return True
+    return False
+
+
+def build_best_evals_payload(
+    *,
+    off_sync=None,
+    off_l1=None,
+    off_perceptual=None,
+    off_step=None,
+    l1_value=None,
+    l1_sync=None,
+    l1_perceptual=None,
+    l1_step=None,
+    perceptual_value=None,
+    perceptual_sync=None,
+    perceptual_l1=None,
+    perceptual_step=None,
+):
+    payload = {}
+    if off_step is not None:
+        payload["off"] = {
+            "sync": float(off_sync),
+            "l1": float(off_l1),
+            "perceptual": None if off_perceptual is None else float(off_perceptual),
+            "step": int(off_step),
+        }
+    if l1_step is not None:
+        payload["l1"] = {
+            "l1": float(l1_value),
+            "sync": None if l1_sync is None else float(l1_sync),
+            "perceptual": None if l1_perceptual is None else float(l1_perceptual),
+            "step": int(l1_step),
+        }
+    if perceptual_step is not None and perceptual_value is not None:
+        payload["perceptual"] = {
+            "perceptual": float(perceptual_value),
+            "sync": None if perceptual_sync is None else float(perceptual_sync),
+            "l1": None if perceptual_l1 is None else float(perceptual_l1),
+            "step": int(perceptual_step),
+        }
+    return payload
+
+
+def extract_best_evals_from_checkpoint(ck):
+    payload = ck.get("best_evals")
+    if isinstance(payload, dict):
+        return payload
+
+    legacy = {}
+    if ck.get("best_off_eval_step") is not None:
+        legacy["off"] = {
+            "sync": float(ck["best_off_eval_sync"]),
+            "l1": float(ck["best_off_eval_l1"]),
+            "perceptual": None,
+            "step": int(ck["best_off_eval_step"]),
+        }
+    if ck.get("best_l1_eval_step") is not None:
+        legacy["l1"] = {
+            "l1": float(ck["best_l1_eval_l1"]),
+            "sync": None if ck.get("best_l1_eval_sync") is None else float(ck["best_l1_eval_sync"]),
+            "perceptual": None,
+            "step": int(ck["best_l1_eval_step"]),
+        }
+    if ck.get("best_perceptual_eval_step") is not None:
+        legacy["perceptual"] = {
+            "perceptual": float(ck["best_perceptual_eval_perceptual"]),
+            "sync": None if ck.get("best_perceptual_eval_sync") is None else float(ck["best_perceptual_eval_sync"]),
+            "l1": None if ck.get("best_perceptual_eval_l1") is None else float(ck["best_perceptual_eval_l1"]),
+            "step": int(ck["best_perceptual_eval_step"]),
+        }
+    return legacy
+
+
 def flatten_temporal(x):
     """(B, C, T, H, W) -> (B*T, C, H, W); passthrough for 4D tensors."""
     if x.dim() == 5:
@@ -299,6 +393,7 @@ def build_generator_checkpoint(
     discriminator=None,
     d_opt=None,
     g_scheduler=None,
+    best_evals=None,
     best_off_eval_sync=None,
     best_off_eval_l1=None,
     best_off_eval_step=None,
@@ -318,12 +413,34 @@ def build_generator_checkpoint(
         ck["d_optimizer"] = d_opt.state_dict()
     if g_scheduler is not None:
         ck["g_scheduler"] = g_scheduler.state_dict()
-    if best_off_eval_sync is not None:
-        ck["best_off_eval_sync"] = float(best_off_eval_sync)
-    if best_off_eval_l1 is not None:
-        ck["best_off_eval_l1"] = float(best_off_eval_l1)
-    if best_off_eval_step is not None:
-        ck["best_off_eval_step"] = int(best_off_eval_step)
+    if best_evals is None:
+        best_evals = build_best_evals_payload(
+            off_sync=best_off_eval_sync,
+            off_l1=best_off_eval_l1,
+            off_step=best_off_eval_step,
+        )
+    if best_evals:
+        ck["best_evals"] = best_evals
+        off_eval = best_evals.get("off")
+        if off_eval is not None:
+            ck["best_off_eval_sync"] = float(off_eval["sync"])
+            ck["best_off_eval_l1"] = float(off_eval["l1"])
+            ck["best_off_eval_step"] = int(off_eval["step"])
+        l1_eval = best_evals.get("l1")
+        if l1_eval is not None:
+            ck["best_l1_eval_l1"] = float(l1_eval["l1"])
+            ck["best_l1_eval_sync"] = None if l1_eval.get("sync") is None else float(l1_eval["sync"])
+            ck["best_l1_eval_step"] = int(l1_eval["step"])
+        perceptual_eval = best_evals.get("perceptual")
+        if perceptual_eval is not None:
+            ck["best_perceptual_eval_perceptual"] = float(perceptual_eval["perceptual"])
+            ck["best_perceptual_eval_sync"] = (
+                None if perceptual_eval.get("sync") is None else float(perceptual_eval["sync"])
+            )
+            ck["best_perceptual_eval_l1"] = (
+                None if perceptual_eval.get("l1") is None else float(perceptual_eval["l1"])
+            )
+            ck["best_perceptual_eval_step"] = int(perceptual_eval["step"])
     return ck
 
 
@@ -685,6 +802,9 @@ def main():
     best_off_eval_sync = float("inf")
     best_off_eval_l1 = float("inf")
     best_off_eval_step = None
+    best_l1_eval_l1 = float("inf")
+    best_l1_eval_sync = float("inf")
+    best_l1_eval_step = None
     if args.resume:
         ck = torch.load(args.resume, map_location=device, weights_only=False)
         generator.load_state_dict(ck["generator"])
@@ -697,12 +817,19 @@ def main():
         resume_kind = str(ck.get("checkpoint_kind", "epoch"))
         restored_global_step = ck.get("global_step")
         restored_effective_sync_wt = ck.get("effective_sync_wt")
-        if ck.get("best_off_eval_sync") is not None:
-            best_off_eval_sync = float(ck["best_off_eval_sync"])
-        if ck.get("best_off_eval_l1") is not None:
-            best_off_eval_l1 = float(ck["best_off_eval_l1"])
-        if ck.get("best_off_eval_step") is not None:
-            best_off_eval_step = int(ck["best_off_eval_step"])
+        restored_best_evals = extract_best_evals_from_checkpoint(ck)
+        off_eval = restored_best_evals.get("off")
+        if off_eval is not None:
+            best_off_eval_sync = float(off_eval["sync"])
+            best_off_eval_l1 = float(off_eval["l1"])
+            best_off_eval_step = int(off_eval["step"])
+        l1_eval = restored_best_evals.get("l1")
+        if l1_eval is not None:
+            best_l1_eval_l1 = float(l1_eval["l1"])
+            best_l1_eval_sync = (
+                float(l1_eval["sync"]) if l1_eval.get("sync") is not None else float("inf")
+            )
+            best_l1_eval_step = int(l1_eval["step"])
         if resume_kind == "step":
             start_epoch = int(ck["epoch"])
             resume_batches_in_epoch = int(ck.get("batches_processed_in_epoch", 0))
@@ -736,6 +863,18 @@ def main():
     latest_save_interval_steps = int(cfg["training"].get("latest_save_interval_steps", 0) or 0)
     latest_ckpt_path = os.path.join(output_dir, "generator_latest.pth")
     best_off_eval_ckpt_path = os.path.join(output_dir, "generator_best_off_eval.pth")
+    best_l1_eval_ckpt_path = os.path.join(output_dir, "generator_best_l1_eval.pth")
+
+    def current_best_evals_payload():
+        return build_best_evals_payload(
+            off_sync=best_off_eval_sync if best_off_eval_step is not None else None,
+            off_l1=best_off_eval_l1 if best_off_eval_step is not None else None,
+            off_step=best_off_eval_step,
+            l1_value=best_l1_eval_l1 if best_l1_eval_step is not None else None,
+            l1_sync=best_l1_eval_sync if best_l1_eval_step is not None else None,
+            l1_step=best_l1_eval_step,
+        )
+
     if official_sync_schedule:
         log(
             "Official-style sync schedule: "
@@ -760,7 +899,8 @@ def main():
             "Latest checkpoint cadence: "
             f"every {latest_save_interval_steps} global steps -> {latest_ckpt_path}"
         )
-        log(f"Best official-like checkpoint path: {best_off_eval_ckpt_path}")
+    log(f"Best official-like checkpoint path: {best_off_eval_ckpt_path}")
+    log(f"Best L1 checkpoint path: {best_l1_eval_ckpt_path}")
     if (official_sync_schedule or adaptive_sync_schedule or sync_eval_monitor_only) and val_loader is None:
         log(
             "WARNING: sync schedule is enabled but no --val-speaker-list was provided; "
@@ -1044,9 +1184,7 @@ def main():
                             discriminator=discriminator,
                             d_opt=d_opt,
                             g_scheduler=g_scheduler,
-                            best_off_eval_sync=best_off_eval_sync,
-                            best_off_eval_l1=best_off_eval_l1,
-                            best_off_eval_step=best_off_eval_step,
+                            best_evals=current_best_evals_payload(),
                         )
                         log(
                             "  New best official-like eval: "
@@ -1055,6 +1193,38 @@ def main():
                             f"at step {best_off_eval_step} -> {best_off_eval_ckpt_path}"
                         )
                         benchmark_best_due = benchmark_cfg is not None
+                    if better_scalar_metric(
+                        candidate_value=avg_recon,
+                        candidate_step=global_step,
+                        best_value=best_l1_eval_l1,
+                        best_step=best_l1_eval_step,
+                        candidate_secondary=avg_sync,
+                        best_secondary=best_l1_eval_sync,
+                    ):
+                        best_l1_eval_l1 = float(avg_recon)
+                        best_l1_eval_sync = float(avg_sync)
+                        best_l1_eval_step = int(global_step)
+                        save_generator_checkpoint(
+                            best_l1_eval_ckpt_path,
+                            epoch=epoch,
+                            global_step=global_step,
+                            batches_processed_in_epoch=effective_epoch_batches,
+                            checkpoint_kind="step",
+                            effective_sync_wt=effective_sync_wt,
+                            generator=generator,
+                            g_opt=g_opt,
+                            cfg=cfg,
+                            discriminator=discriminator,
+                            d_opt=d_opt,
+                            g_scheduler=g_scheduler,
+                            best_evals=current_best_evals_payload(),
+                        )
+                        log(
+                            "  New best L1 eval: "
+                            f"val_l1={best_l1_eval_l1:.4f} "
+                            f"val_sync={best_l1_eval_sync:.4f} "
+                            f"at step {best_l1_eval_step} -> {best_l1_eval_ckpt_path}"
+                        )
 
             latest_checkpoint_due = (
                 (latest_save_interval_steps > 0 and global_step % latest_save_interval_steps == 0)
@@ -1075,9 +1245,7 @@ def main():
                     discriminator=discriminator,
                     d_opt=d_opt,
                     g_scheduler=g_scheduler,
-                    best_off_eval_sync=best_off_eval_sync if best_off_eval_step is not None else None,
-                    best_off_eval_l1=best_off_eval_l1 if best_off_eval_step is not None else None,
-                    best_off_eval_step=best_off_eval_step,
+                    best_evals=current_best_evals_payload(),
                 )
                 latest_checkpoint_saved = True
                 if benchmark_latest_due:
@@ -1151,9 +1319,7 @@ def main():
                 discriminator=discriminator,
                 d_opt=d_opt,
                 g_scheduler=g_scheduler,
-                best_off_eval_sync=best_off_eval_sync if best_off_eval_step is not None else None,
-                best_off_eval_l1=best_off_eval_l1 if best_off_eval_step is not None else None,
-                best_off_eval_step=best_off_eval_step,
+                best_evals=current_best_evals_payload(),
             )
             if latest_save_interval_steps > 0:
                 save_generator_checkpoint(
@@ -1169,9 +1335,7 @@ def main():
                     discriminator=discriminator,
                     d_opt=d_opt,
                     g_scheduler=g_scheduler,
-                    best_off_eval_sync=best_off_eval_sync if best_off_eval_step is not None else None,
-                    best_off_eval_l1=best_off_eval_l1 if best_off_eval_step is not None else None,
-                    best_off_eval_step=best_off_eval_step,
+                    best_evals=current_best_evals_payload(),
                 )
 
         # Save sample images
