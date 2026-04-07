@@ -32,7 +32,11 @@ from pathlib import Path
 
 import cv2
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+THIS_FILE = Path(__file__).resolve()
+SCRIPT_DIR = THIS_FILE.parent
+REPO_ROOT = THIS_FILE.parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from preprocess_dataset import (  # noqa: E402
@@ -477,7 +481,9 @@ def export_segment(
     )
 
     if dataset_kind == "talkvid":
-        from sort_talkvid_processed_by_quality import classify_sample
+        from dataset_prepare.process.talkvid.scripts.sort_talkvid_processed_by_quality import (
+            classify_sample,
+        )
 
         tier, tier_reasons = classify_sample(
             {
