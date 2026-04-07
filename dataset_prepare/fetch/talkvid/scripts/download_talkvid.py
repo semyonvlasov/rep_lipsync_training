@@ -573,6 +573,7 @@ def main() -> int:
     downloaded = 0
     cookie_successes = count_successful_downloads(manifest_path)
     downloaded_bytes = 0
+    batch_raw_bytes = start_raw_bytes
     skipped_existing = 0
     skipped_blocked_source = 0
     filtered_out = 0
@@ -600,7 +601,7 @@ def main() -> int:
         size_bytes: int,
         detail: Optional[str],
     ) -> None:
-        nonlocal downloaded, downloaded_bytes, failures, bot_check_hit, cookie_successes
+        nonlocal downloaded, downloaded_bytes, batch_raw_bytes, failures, bot_check_hit, cookie_successes
         nonlocal rate_limited_hit, stop_submitting, rate_limit_events
         nonlocal bot_check_notice_sent, rate_limit_notice_sent
 
@@ -628,6 +629,7 @@ def main() -> int:
             downloaded += 1
             cookie_successes += 1
             downloaded_bytes += size_bytes
+            batch_raw_bytes += size_bytes
             size_mb = size_bytes / (1024 ** 2)
             log(
                 f"[TalkVid] [{attempt_index}] {item_id} "
@@ -673,12 +675,13 @@ def main() -> int:
                         log(f"[TalkVid] Reached max new clips: {downloaded}")
                         break
 
-                    if target_added_bytes > 0 and downloaded_bytes >= target_added_bytes:
+                    if target_added_bytes > 0 and batch_raw_bytes >= target_added_bytes:
                         target_reached_hit = True
                         stop_submitting = True
                         log(
-                            f"[TalkVid] Reached target downloaded size this run: "
-                            f"{downloaded_bytes / (1024 ** 3):.2f} GB"
+                            f"[TalkVid] Reached target batch size: "
+                            f"{batch_raw_bytes / (1024 ** 3):.2f} GB "
+                            f"(started at {start_raw_bytes / (1024 ** 3):.2f} GB)"
                         )
                         break
 
@@ -815,6 +818,7 @@ def main() -> int:
         f"rate_limit_cooldowns_used={rate_limit_cooldowns_used}"
     )
     log(f"[TalkVid] downloaded this run: {downloaded_bytes / (1024 ** 3):.2f} GB")
+    log(f"[TalkVid] batch size considered for target: {batch_raw_bytes / (1024 ** 3):.2f} GB")
     log(f"[TalkVid] raw size: {final_raw_bytes / (1024 ** 3):.2f} GB")
     log(f"[TalkVid] manifest: {manifest_path}")
     if rate_limit_exit:
