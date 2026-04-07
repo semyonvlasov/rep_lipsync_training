@@ -13,6 +13,7 @@ Output layout:
     sample_name.mp4
     sample_name.json
     export_manifest.jsonl
+    export_resume_state.json
     summary.json
 
 Bad samples are discarded using the same quality gates as preprocess_dataset:
@@ -85,6 +86,63 @@ def load_json(path: Path):
             return json.load(f)
     except Exception:
         return None
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def load_resume_progress(manifest_path: Path, resume_state_path: Path) -> tuple[dict, int, int]:
+    counters = {
+        "ok": 0,
+        "skip": 0,
+        "discard": 0,
+        "fail": 0,
+        "confident": 0,
+        "medium": 0,
+        "unconfident": 0,
+    }
+    total_segments = 0
+    latest_manifest_index = 0
+
+    if manifest_path.exists():
+        with open(manifest_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                status = payload.get("status")
+                tier = payload.get("tier")
+                if status in counters:
+                    counters[status] += 1
+                if status == "ok" and tier in ("confident", "medium", "unconfident"):
+                    counters[tier] += 1
+                total_segments += 1
+
+                try:
+                    latest_manifest_index = max(latest_manifest_index, int(payload.get("index") or 0))
+                except (TypeError, ValueError):
+                    pass
+
+    resume_state = load_json(resume_state_path)
+    next_video_index = 0
+    if isinstance(resume_state, dict):
+        try:
+            next_video_index = int(resume_state.get("next_video_index") or 0)
+        except (TypeError, ValueError):
+            next_video_index = 0
+
+    next_video_index = max(next_video_index, latest_manifest_index)
+    return counters, total_segments, next_video_index
 
 
 def serialize_detection_records(detections, frame_offset: int = 0):
@@ -757,17 +815,9 @@ def main() -> int:
 
     dataset_kind = detect_dataset_kind(args.source_archive, input_dir, args.dataset_kind)
     manifest_path = output_dir / "export_manifest.jsonl"
+    resume_state_path = output_dir / "export_resume_state.json"
     summary_path = output_dir / "summary.json"
-
-    counters = {
-        "ok": 0,
-        "skip": 0,
-        "discard": 0,
-        "fail": 0,
-        "confident": 0,
-        "medium": 0,
-        "unconfident": 0,
-    }
+    counters, total_segments, start_video_index = load_resume_progress(manifest_path, resume_state_path)
 
     log(f"[FaceclipExport] input_dir={input_dir}")
     log(f"[FaceclipExport] output_dir={output_dir}")
@@ -792,9 +842,16 @@ def main() -> int:
 
     videos = list(iter_videos(input_dir))
     log(f"[FaceclipExport] videos={len(videos)}")
+    start_video_index = max(0, min(start_video_index, len(videos)))
+    if start_video_index > 0 and start_video_index < len(videos):
+        log(
+            f"[FaceclipExport] resume_from_video_index={start_video_index + 1} "
+            f"source_video={videos[start_video_index].name}"
+        )
+    elif start_video_index >= len(videos) and len(videos) > 0:
+        log("[FaceclipExport] resume_at_end=true; no source videos left to export")
 
-    total_segments = 0
-    for idx, video_path in enumerate(videos, start=1):
+    for idx, video_path in enumerate(videos[start_video_index:], start=start_video_index + 1):
         try:
             segment_results = export_one(video_path, output_dir, normalized_dir, dataset_kind, args)
         except Exception as exc:
@@ -838,6 +895,15 @@ def main() -> int:
                     "source_segment_end_frame": result["source_segment_end_frame"],
                 },
             )
+        write_json(
+            resume_state_path,
+            {
+                "ts": timestamp(),
+                "next_video_index": idx,
+                "last_completed_index": idx,
+                "last_completed_source_video": video_path.name,
+            },
+        )
 
     summary = {
         "ts": timestamp(),
@@ -859,6 +925,11 @@ def main() -> int:
     with open(summary_path, "w") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     log(f"[FaceclipExport] summary={summary}")
+    if resume_state_path.exists():
+        try:
+            resume_state_path.unlink()
+        except OSError:
+            pass
     return 0
 
 
