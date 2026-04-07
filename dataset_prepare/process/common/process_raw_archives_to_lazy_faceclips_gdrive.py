@@ -419,7 +419,7 @@ def main() -> int:
     parser.add_argument("--ffmpeg-threads", type=int, default=4)
     parser.add_argument("--ffmpeg-timeout", type=int, default=180)
     parser.add_argument("--video-encoder", default="auto")
-    parser.add_argument("--normalized-video-bitrate", default="")
+    parser.add_argument("--normalized-video-bitrate", default="15m")
     parser.add_argument("--video-bitrate", default="600k")
     parser.add_argument("--keep-failed-artifacts", action="store_true")
     args = parser.parse_args()
