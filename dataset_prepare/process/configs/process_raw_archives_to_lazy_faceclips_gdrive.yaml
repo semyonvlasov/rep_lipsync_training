@@ -7,5 +7,9 @@ paths:
   processing_folder: data/dataset_prepare/process/raw_faceclips_x288_cycle
   manifest_path: data/dataset_prepare/process/raw_faceclips_x288_cycle/archive_manifest.jsonl
 
+source:
+  archive_glob: "*.tar"
+
 process:
   max_archives: 0
+  keep_failed_artifacts: false

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import shutil
 import subprocess
 import tarfile
 import sys
@@ -54,10 +55,22 @@ from dataset_prepare.process.common.pipeline_utils import (
     update_state_manifest,
     write_state_manifest,
 )
+from dataset_prepare.common.config import (
+    ConfigError,
+    exit_with_config_error,
+    get_bool,
+    get_float,
+    get_int,
+    get_str,
+    load_stage_config,
+    resolve_repo_path,
+)
 
 
-DEFAULT_SOURCE_FOLDER_ID = "1v06momk8fR-eqw79Z93zczBx_InWsCS9"
-DEFAULT_DEST_FOLDER_ID = "1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n"
+EXPECTED_STAGE = "process_raw_archives_to_lazy_faceclips_gdrive"
+DEFAULT_CONFIG_PATH = (
+    REPO_ROOT / "dataset_prepare" / "process" / "configs" / "process_raw_archives_to_lazy_faceclips_gdrive.yaml"
+)
 STATE_MANIFEST_BASENAME = "active_archive_state.json"
 
 
@@ -382,48 +395,120 @@ def process_archive_state(
         remove_state_manifest(state_path)
 
 
-def main() -> int:
+def parse_args(default_config: Path) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source-folder-id", default=DEFAULT_SOURCE_FOLDER_ID)
-    parser.add_argument("--dest-folder-id", default=DEFAULT_DEST_FOLDER_ID)
-    parser.add_argument("--remote", default="gdrive:")
-    parser.add_argument("--data-root", default="data/dataset_prepare/process/raw_faceclips_x288_cycle")
-    parser.add_argument(
-        "--manifest-path",
-        default="data/dataset_prepare/process/raw_faceclips_x288_cycle/archive_manifest.jsonl",
-    )
-    parser.add_argument("--archive-glob", default="*.tar")
-    parser.add_argument("--max-archives", type=int, default=0, help="0=all pending")
-    parser.add_argument("--python-bin", default="python3")
-    parser.add_argument("--size", type=int, default=288)
-    parser.add_argument("--fps", type=int, default=25)
-    parser.add_argument("--max-frames", type=int, default=250)
-    parser.add_argument("--detect-every", type=int, default=1)
-    parser.add_argument("--smooth-window", type=int, default=5)
+    parser.add_argument("config", nargs="?", default=str(default_config))
+    parser.add_argument("--source-folder-id", default=None)
+    parser.add_argument("--dest-folder-id", default=None)
+    parser.add_argument("--remote", default=None)
+    parser.add_argument("--data-root", default=None)
+    parser.add_argument("--manifest-path", default=None)
+    parser.add_argument("--archive-glob", default=None)
+    parser.add_argument("--max-archives", type=int, default=None, help="0=all pending")
+    parser.add_argument("--python-bin", default=None)
+    parser.add_argument("--size", type=int, default=None)
+    parser.add_argument("--fps", type=int, default=None)
+    parser.add_argument("--max-frames", type=int, default=None)
+    parser.add_argument("--detect-every", type=int, default=None)
+    parser.add_argument("--smooth-window", type=int, default=None)
     parser.add_argument(
         "--smoothing-style",
         choices=["legacy_centered", "official_inference", "none"],
-        default="official_inference",
+        default=None,
     )
     parser.add_argument(
         "--framing-style",
         choices=["legacy_square", "official_inference"],
-        default="official_inference",
+        default=None,
     )
-    parser.add_argument("--detector-backend", choices=["opencv", "sfd"], default="sfd")
-    parser.add_argument("--detector-device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
-    parser.add_argument("--detector-batch-size", type=int, default=4)
-    parser.add_argument("--min-detector-score", type=float, default=0.99999)
-    parser.add_argument("--resize-device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
+    parser.add_argument("--detector-backend", choices=["opencv", "sfd"], default=None)
+    parser.add_argument("--detector-device", choices=["auto", "cpu", "cuda", "mps"], default=None)
+    parser.add_argument("--detector-batch-size", type=int, default=None)
+    parser.add_argument("--min-detector-score", type=float, default=None)
+    parser.add_argument("--resize-device", choices=["auto", "cpu", "cuda", "mps"], default=None)
     parser.add_argument("--ffmpeg-bin", default=None)
-    parser.add_argument("--ffmpeg-threads", type=int, default=4)
-    parser.add_argument("--ffmpeg-timeout", type=int, default=180)
-    parser.add_argument("--video-encoder", default="auto")
-    parser.add_argument("--normalized-video-bitrate", default="15m")
-    parser.add_argument("--video-bitrate", default="600k")
-    parser.add_argument("--keep-failed-artifacts", action="store_true")
-    args = parser.parse_args()
-    args.normalized_video_bitrate = args.normalized_video_bitrate or args.video_bitrate
+    parser.add_argument("--ffmpeg-threads", type=int, default=None)
+    parser.add_argument("--ffmpeg-timeout", type=int, default=None)
+    parser.add_argument("--video-encoder", default=None)
+    parser.add_argument("--normalized-video-bitrate", default=None)
+    parser.add_argument("--video-bitrate", default=None)
+    parser.add_argument("--keep-failed-artifacts", dest="keep_failed_artifacts", action="store_true", default=None)
+    parser.add_argument("--no-keep-failed-artifacts", dest="keep_failed_artifacts", action="store_false")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args(DEFAULT_CONFIG_PATH)
+
+    try:
+        _, config = load_stage_config(args.config, EXPECTED_STAGE)
+    except ConfigError as exc:
+        return exit_with_config_error(exc)
+
+    args.source_folder_id = args.source_folder_id or get_str(config, "gdrive", "raw", "folder_id")
+    args.dest_folder_id = args.dest_folder_id or get_str(config, "gdrive", "processed", "folder_id")
+    args.remote = args.remote or get_str(config, "gdrive", "remote")
+    args.archive_glob = args.archive_glob or get_str(config, "source", "archive_glob")
+    args.max_archives = (
+        args.max_archives if args.max_archives is not None else get_int(config, "process", "max_archives")
+    )
+    args.python_bin = args.python_bin or get_str(config, "runtime", "python_bin")
+    args.size = args.size if args.size is not None else get_int(config, "process", "faceclip_size")
+    args.fps = args.fps if args.fps is not None else get_int(config, "process", "processed_fps")
+    args.max_frames = (
+        args.max_frames if args.max_frames is not None else get_int(config, "process", "max_frames")
+    )
+    args.detect_every = (
+        args.detect_every if args.detect_every is not None else get_int(config, "process", "detect_every")
+    )
+    args.smooth_window = (
+        args.smooth_window if args.smooth_window is not None else get_int(config, "process", "smooth_window")
+    )
+    args.smoothing_style = args.smoothing_style or get_str(config, "process", "smoothing_style")
+    args.framing_style = args.framing_style or get_str(config, "process", "framing_style")
+    args.detector_backend = args.detector_backend or get_str(config, "process", "detector_backend")
+    args.detector_device = args.detector_device or get_str(config, "process", "detector_device")
+    args.detector_batch_size = (
+        args.detector_batch_size
+        if args.detector_batch_size is not None
+        else get_int(config, "process", "detector_batch_size")
+    )
+    args.min_detector_score = (
+        args.min_detector_score
+        if args.min_detector_score is not None
+        else get_float(config, "process", "min_detector_score")
+    )
+    args.resize_device = args.resize_device or get_str(config, "process", "resize_device")
+    if args.ffmpeg_bin is None:
+        args.ffmpeg_bin = get_str(config, "runtime", "ffmpeg_bin", allow_empty=True)
+    args.ffmpeg_threads = (
+        args.ffmpeg_threads if args.ffmpeg_threads is not None else get_int(config, "runtime", "ffmpeg_threads")
+    )
+    args.ffmpeg_timeout = (
+        args.ffmpeg_timeout if args.ffmpeg_timeout is not None else get_int(config, "runtime", "ffmpeg_timeout")
+    )
+    args.video_encoder = args.video_encoder or get_str(config, "runtime", "video_encoder")
+    args.normalized_video_bitrate = args.normalized_video_bitrate or get_str(
+        config, "process", "normalized_video_bitrate"
+    )
+    args.video_bitrate = args.video_bitrate or get_str(config, "process", "processed_video_bitrate")
+    args.keep_failed_artifacts = (
+        args.keep_failed_artifacts
+        if args.keep_failed_artifacts is not None
+        else get_bool(config, "process", "keep_failed_artifacts")
+    )
+    args.data_root = str(
+        resolve_repo_path(
+            REPO_ROOT,
+            args.data_root or get_str(config, "paths", "processing_folder"),
+        )
+    )
+    args.manifest_path = str(
+        resolve_repo_path(
+            REPO_ROOT,
+            args.manifest_path or get_str(config, "paths", "manifest_path"),
+        )
+    )
 
     export_script = Path(__file__).with_name("export_faceclip_batch.py").resolve()
     root = Path(args.data_root)
