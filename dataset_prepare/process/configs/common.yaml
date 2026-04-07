@@ -33,5 +33,5 @@ process:
   detector_batch_size: 4
   min_detector_score: 0.99999
   resize_device: auto
-  normalized_video_bitrate: 15m
+  normalized_video_bitrate: 20m
   processed_video_bitrate: 600k
