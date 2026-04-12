@@ -46,6 +46,8 @@ OFFICIAL_SYNCNET_MODELS_DIR = _resolve_existing_path(
 DEFAULT_SYNCNET_CHECKPOINT = _resolve_existing_path(
     os.path.join(PROJECT_ROOT, "models", "official_syncnet", "checkpoints", "lipsync_expert.pth"),
     os.path.join(WORKSPACE_ROOT, "models", "official_syncnet", "checkpoints", "lipsync_expert.pth"),
+    os.path.join(PROJECT_ROOT, "models", "wav2lip", "checkpoints", "lipsync_expert.pth"),
+    os.path.join(WORKSPACE_ROOT, "models", "wav2lip", "checkpoints", "lipsync_expert.pth"),
 )
 
 SYNC_ALIGNMENT_VERSION = 1
@@ -58,6 +60,8 @@ DEFAULT_SYNC_ALIGNMENT_START_GAP_MULTIPLE = 0
 DEFAULT_SYNC_ALIGNMENT_BATCH_SIZE = 640
 DEFAULT_SYNC_ALIGNMENT_SAMPLE_DENSITY_PER_5S = 10.0
 DEFAULT_SYNC_ALIGNMENT_OUTLIER_TRIM_RATIO = 0.2
+DEFAULT_SYNC_ALIGNMENT_MIN_CONSENSUS_RATIO = None
+DEFAULT_SYNC_ALIGNMENT_MAX_SHIFT_MAD = None
 
 _SYNCNET_MODEL_CACHE = {}
 
@@ -559,16 +563,26 @@ def _trim_outlier_points_by_local_shift(
         key=lambda idx: (deviations[idx], local_best_losses[idx]),
         reverse=True,
     )
-    drop_indices = {
-        idx for idx in ranked
-        if deviations[idx] > 0.0
-    }
-    drop_indices = set(list(drop_indices)[:trim_count])
+    ranked = [idx for idx in ranked if deviations[idx] > 0.0]
+    drop_indices = set(ranked[:trim_count])
 
     keep_mask = np.ones(n_points, dtype=bool)
     for idx in drop_indices:
         keep_mask[idx] = False
     return keep_mask, local_best_shifts, center_shift
+
+
+def _compute_post_trim_shift_stats(
+    kept_local_best_shifts: np.ndarray,
+) -> tuple[float | None, float | None, float | None]:
+    if kept_local_best_shifts.size == 0:
+        return None, None, None
+
+    center_shift = float(np.median(kept_local_best_shifts))
+    abs_dev = np.abs(kept_local_best_shifts.astype(np.float32) - center_shift)
+    shift_mad = float(np.median(abs_dev))
+    consensus_ratio = float(np.mean(abs_dev <= 1.0))
+    return center_shift, shift_mad, consensus_ratio
 
 
 def _build_visual_batch(frames, starts, T: int, device: str) -> torch.Tensor:
@@ -605,6 +619,8 @@ def compute_sync_alignment_from_faceclip(
     start_gap_multiple: int = DEFAULT_SYNC_ALIGNMENT_START_GAP_MULTIPLE,
     batch_size: int = DEFAULT_SYNC_ALIGNMENT_BATCH_SIZE,
     outlier_trim_ratio: float = DEFAULT_SYNC_ALIGNMENT_OUTLIER_TRIM_RATIO,
+    min_consensus_ratio: float | None = DEFAULT_SYNC_ALIGNMENT_MIN_CONSENSUS_RATIO,
+    max_shift_mad: float | None = DEFAULT_SYNC_ALIGNMENT_MAX_SHIFT_MAD,
 ):
     resolved_device = resolve_sync_alignment_device(device)
     if not checkpoint_path or not os.path.exists(checkpoint_path):
@@ -694,10 +710,38 @@ def compute_sync_alignment_from_faceclip(
         float(outlier_trim_ratio),
     )
     kept_losses = losses[keep_mask]
+    kept_local_best_shifts = local_best_shifts[keep_mask]
+    post_trim_center_shift, shift_mad, consensus_ratio = _compute_post_trim_shift_stats(
+        kept_local_best_shifts
+    )
     mean_losses = kept_losses.mean(axis=0)
     best_idx = int(np.argmin(mean_losses))
     best_audio_shift = int(audio_shifts[best_idx])
     zero_idx = audio_shifts.index(0)
+    consensus_failed = False
+    shift_mad_failed = False
+    weak_sync_signal_reasons = []
+    if min_consensus_ratio is not None and consensus_ratio is not None:
+        consensus_failed = float(consensus_ratio) <= float(min_consensus_ratio)
+        if consensus_failed:
+            weak_sync_signal_reasons.append(
+                f"consensus_ratio<={float(min_consensus_ratio):.4f}"
+            )
+    if max_shift_mad is not None and shift_mad is not None:
+        shift_mad_failed = float(shift_mad) >= float(max_shift_mad)
+        if shift_mad_failed:
+            weak_sync_signal_reasons.append(
+                f"shift_mad>={float(max_shift_mad):.4f}"
+            )
+
+    if min_consensus_ratio is not None and max_shift_mad is not None:
+        weak_sync_signal = bool(consensus_failed or shift_mad_failed)
+    elif min_consensus_ratio is not None:
+        weak_sync_signal = bool(consensus_failed)
+    elif max_shift_mad is not None:
+        weak_sync_signal = bool(shift_mad_failed)
+    else:
+        weak_sync_signal = False
 
     metrics_by_shift = {
         str(int(shift)): {
@@ -718,7 +762,15 @@ def compute_sync_alignment_from_faceclip(
         "kept_starts": [int(chosen_starts[idx]) for idx, keep in enumerate(keep_mask.tolist()) if keep],
         "dropped_starts": [int(chosen_starts[idx]) for idx, keep in enumerate(keep_mask.tolist()) if not keep],
         "local_best_shifts": [int(v) for v in local_best_shifts.tolist()],
+        "kept_local_best_shifts": [int(v) for v in kept_local_best_shifts.tolist()],
         "local_best_shift_center": float(center_shift),
+        "consensus_ratio": None if consensus_ratio is None else float(consensus_ratio),
+        "shift_mad": None if shift_mad is None else float(shift_mad),
+        "post_trim_shift_center": None if post_trim_center_shift is None else float(post_trim_center_shift),
+        "weak_sync_signal": bool(weak_sync_signal),
+        "weak_sync_signal_reasons": weak_sync_signal_reasons,
+        "min_consensus_ratio": None if min_consensus_ratio is None else float(min_consensus_ratio),
+        "max_shift_mad": None if max_shift_mad is None else float(max_shift_mad),
         "outlier_trim_ratio": float(outlier_trim_ratio),
         "num_points_before_trim": int(losses.shape[0]),
         "num_points_after_trim": int(kept_losses.shape[0]),

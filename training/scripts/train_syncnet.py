@@ -132,6 +132,8 @@ def build_sync_alignment_kwargs(cfg):
         "sync_alignment_device": sync_cfg.get("device", "auto"),
         "sync_alignment_batch_size": sync_cfg.get("batch_size", 640),
         "sync_alignment_outlier_trim_ratio": sync_cfg.get("outlier_trim_ratio", 0.2),
+        "sync_alignment_min_consensus_ratio": sync_cfg.get("min_consensus_ratio"),
+        "sync_alignment_max_shift_mad": sync_cfg.get("max_shift_mad"),
         "sync_alignment_syncnet_checkpoint": sync_cfg.get("syncnet_checkpoint"),
         "sync_alignment_write_manifest": sync_cfg.get("write_manifest", True),
     }

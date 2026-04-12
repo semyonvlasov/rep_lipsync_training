@@ -91,6 +91,8 @@ data:
     device: "auto"
     batch_size: 640
     outlier_trim_ratio: 0.2
+    min_consensus_ratio: null
+    max_shift_mad: null
     syncnet_checkpoint: null # defaults to models/official_syncnet/checkpoints/lipsync_expert.pth
     write_manifest: true
 

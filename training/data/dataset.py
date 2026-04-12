@@ -42,7 +42,9 @@ from .sync_alignment import (
     DEFAULT_SYNCNET_CHECKPOINT,
     DEFAULT_SYNC_ALIGNMENT_BATCH_SIZE,
     DEFAULT_SYNC_ALIGNMENT_GUARD_MEL_TICKS,
+    DEFAULT_SYNC_ALIGNMENT_MAX_SHIFT_MAD,
     DEFAULT_SYNC_ALIGNMENT_MIN_START_GAP_RATIO,
+    DEFAULT_SYNC_ALIGNMENT_MIN_CONSENSUS_RATIO,
     DEFAULT_SYNC_ALIGNMENT_OUTLIER_TRIM_RATIO,
     DEFAULT_SYNC_ALIGNMENT_SAMPLE_DENSITY_PER_5S,
     DEFAULT_SYNC_ALIGNMENT_SAMPLES,
@@ -124,6 +126,8 @@ class LipSyncDataset(Dataset):
         sync_alignment_device="auto",
         sync_alignment_batch_size=DEFAULT_SYNC_ALIGNMENT_BATCH_SIZE,
         sync_alignment_outlier_trim_ratio=DEFAULT_SYNC_ALIGNMENT_OUTLIER_TRIM_RATIO,
+        sync_alignment_min_consensus_ratio=DEFAULT_SYNC_ALIGNMENT_MIN_CONSENSUS_RATIO,
+        sync_alignment_max_shift_mad=DEFAULT_SYNC_ALIGNMENT_MAX_SHIFT_MAD,
         sync_alignment_syncnet_checkpoint=None,
         sync_alignment_write_manifest=True,
     ):
@@ -165,6 +169,16 @@ class LipSyncDataset(Dataset):
         self.sync_alignment_outlier_trim_ratio = min(
             0.49,
             max(0.0, float(sync_alignment_outlier_trim_ratio)),
+        )
+        self.sync_alignment_min_consensus_ratio = (
+            None
+            if sync_alignment_min_consensus_ratio is None
+            else float(sync_alignment_min_consensus_ratio)
+        )
+        self.sync_alignment_max_shift_mad = (
+            None
+            if sync_alignment_max_shift_mad is None
+            else float(sync_alignment_max_shift_mad)
         )
         self.sync_alignment_syncnet_checkpoint = (
             sync_alignment_syncnet_checkpoint or DEFAULT_SYNCNET_CHECKPOINT
@@ -846,6 +860,8 @@ class LipSyncDataset(Dataset):
                     start_gap_multiple=self.sync_alignment_start_gap_multiple,
                     batch_size=self.sync_alignment_batch_size,
                     outlier_trim_ratio=self.sync_alignment_outlier_trim_ratio,
+                    min_consensus_ratio=self.sync_alignment_min_consensus_ratio,
+                    max_shift_mad=self.sync_alignment_max_shift_mad,
                 )
             except Exception as exc:
                 if not self.skip_bad_samples:
@@ -873,12 +889,38 @@ class LipSyncDataset(Dataset):
                 "kept_starts": result.get("kept_starts", []),
                 "dropped_starts": result.get("dropped_starts", []),
                 "local_best_shifts": result.get("local_best_shifts", []),
+                "kept_local_best_shifts": result.get("kept_local_best_shifts", []),
                 "local_best_shift_center": result.get("local_best_shift_center"),
+                "post_trim_shift_center": result.get("post_trim_shift_center"),
+                "consensus_ratio": result.get("consensus_ratio"),
+                "shift_mad": result.get("shift_mad"),
+                "weak_sync_signal": result.get("weak_sync_signal"),
+                "weak_sync_signal_reasons": result.get("weak_sync_signal_reasons", []),
+                "min_consensus_ratio": result.get("min_consensus_ratio"),
+                "max_shift_mad": result.get("max_shift_mad"),
                 "num_points_before_trim": result.get("num_points_before_trim"),
                 "num_points_after_trim": result.get("num_points_after_trim"),
                 "outlier_trim_ratio": result.get("outlier_trim_ratio"),
                 "sample_density_per_5s": result.get("sample_density_per_5s"),
             }
+            if self.skip_bad_samples and bool(result.get("weak_sync_signal")):
+                failed_meta = write_failed_sync_alignment_to_meta_path(
+                    entry["meta_path"],
+                    meta,
+                    n_frames=len(frames),
+                    mel_total_steps=int(mel.shape[1]),
+                    fps=self.fps,
+                    mel_frames_per_second=self.mel_frames_per_second,
+                    mel_step_size=self.mel_step_size,
+                    search_guard_mel_ticks=self.sync_alignment_guard_mel_ticks,
+                    source="computed_on_demand",
+                    reason="weak_sync_signal",
+                    error=";".join(result.get("weak_sync_signal_reasons", [])) or None,
+                    extra=extra,
+                )
+                entry["meta"] = failed_meta
+                entry["_frame_count"] = 0
+                return failed_meta
             updated_meta = upsert_sync_alignment(
                 meta,
                 audio_shift_mel_ticks=result["audio_shift_mel_ticks"],
