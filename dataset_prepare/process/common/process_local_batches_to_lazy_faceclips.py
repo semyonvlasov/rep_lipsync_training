@@ -146,6 +146,7 @@ def process_batch_state(
         state = update_state_manifest(state_path, state, "process_started")
         run_logged(
             build_faceclip_export_cmd(
+                config_path=Path(args.process_config),
                 python_bin=args.python_bin,
                 export_script=export_script,
                 input_dir=raw_dir,
@@ -153,24 +154,6 @@ def process_batch_state(
                 normalized_dir=batch_normalized_root,
                 source_archive=source_archive,
                 dataset_kind=args.dataset_kind,
-                size=args.size,
-                fps=args.fps,
-                max_frames=args.max_frames,
-                detect_every=args.detect_every,
-                smooth_window=args.smooth_window,
-                detector_backend=args.detector_backend,
-                detector_device=args.detector_device,
-                detector_batch_size=args.detector_batch_size,
-                resize_device=args.resize_device,
-                ffmpeg_bin=args.ffmpeg_bin or "",
-                ffmpeg_threads=args.ffmpeg_threads,
-                ffmpeg_timeout=args.ffmpeg_timeout,
-                video_encoder=args.video_encoder,
-                normalized_video_bitrate=args.normalized_video_bitrate,
-                video_bitrate=args.video_bitrate,
-                smoothing_style=args.smoothing_style,
-                framing_style=args.framing_style,
-                min_detector_score=args.min_detector_score,
             ),
             prefix="[LocalFaceclipCycle:export]",
         )
@@ -309,34 +292,8 @@ def main() -> int:
     parser.add_argument("--poll-seconds", type=int, default=20)
     parser.add_argument("--producer-done-flag", default=None)
     parser.add_argument("--max-batches", type=int, default=0, help="0=all available")
-    parser.add_argument("--size", type=int, default=256)
-    parser.add_argument("--fps", type=int, default=25)
-    parser.add_argument("--max-frames", type=int, default=750)
-    parser.add_argument("--detect-every", type=int, default=10)
-    parser.add_argument("--smooth-window", type=int, default=9)
-    parser.add_argument(
-        "--smoothing-style",
-        choices=["legacy_centered", "official_inference", "none"],
-        default="official_inference",
-    )
-    parser.add_argument(
-        "--framing-style",
-        choices=["legacy_square", "official_inference"],
-        default="official_inference",
-    )
-    parser.add_argument("--detector-backend", choices=["opencv", "sfd"], default="opencv")
-    parser.add_argument("--detector-device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
-    parser.add_argument("--detector-batch-size", type=int, default=4)
-    parser.add_argument("--min-detector-score", type=float, default=0.99999)
-    parser.add_argument("--resize-device", choices=["auto", "cpu", "cuda", "mps"], default="cpu")
-    parser.add_argument("--ffmpeg-bin", default=None)
-    parser.add_argument("--ffmpeg-threads", type=int, default=1)
-    parser.add_argument("--ffmpeg-timeout", type=int, default=180)
-    parser.add_argument("--video-encoder", default="auto")
-    parser.add_argument("--normalized-video-bitrate", default="")
-    parser.add_argument("--video-bitrate", default="2200k")
+    parser.add_argument("--process-config", required=True)
     args = parser.parse_args()
-    args.normalized_video_bitrate = args.normalized_video_bitrate or args.video_bitrate
 
     batches_dir = Path(args.batches_dir)
     data_root = Path(args.data_root)
@@ -360,6 +317,7 @@ def main() -> int:
     log(f"[LocalFaceclipCycle] dataset_kind={args.dataset_kind}")
     log(f"[LocalFaceclipCycle] batches_dir={batches_dir}")
     log(f"[LocalFaceclipCycle] data_root={data_root}")
+    log(f"[LocalFaceclipCycle] process_config={args.process_config}")
     log(f"[LocalFaceclipCycle] state_manifest={state_path}")
     log(f"[LocalFaceclipCycle] dest_archives={len(dest_archives)}")
 

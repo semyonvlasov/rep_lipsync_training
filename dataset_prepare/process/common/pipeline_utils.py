@@ -192,6 +192,7 @@ def append_failure_event(
 
 def build_faceclip_export_cmd(
     *,
+    config_path: Path,
     python_bin: str,
     export_script: Path,
     input_dir: Path,
@@ -199,29 +200,12 @@ def build_faceclip_export_cmd(
     normalized_dir: Path,
     source_archive: str,
     dataset_kind: str,
-    size: int,
-    fps: int,
-    max_frames: int,
-    detect_every: int,
-    smooth_window: int,
-    detector_backend: str,
-    detector_device: str,
-    detector_batch_size: int,
-    resize_device: str,
-    ffmpeg_bin: str,
-    ffmpeg_threads: int,
-    ffmpeg_timeout: int,
-    video_encoder: str,
-    normalized_video_bitrate: str,
-    video_bitrate: str,
-    smoothing_style: str | None = None,
-    framing_style: str | None = None,
-    min_detector_score: float | None = None,
-    input_is_normalized: bool = False,
 ) -> list[str]:
     cmd = [
         python_bin,
         str(export_script),
+        "--config",
+        str(config_path),
         "--input-dir",
         str(input_dir),
         "--output-dir",
@@ -232,43 +216,5 @@ def build_faceclip_export_cmd(
         source_archive,
         "--dataset-kind",
         dataset_kind,
-        "--size",
-        str(size),
-        "--fps",
-        str(fps),
-        "--max-frames",
-        str(max_frames),
-        "--detect-every",
-        str(detect_every),
-        "--smooth-window",
-        str(smooth_window),
-        "--detector-backend",
-        detector_backend,
-        "--detector-device",
-        detector_device,
-        "--detector-batch-size",
-        str(detector_batch_size),
-        "--resize-device",
-        resize_device,
-        "--ffmpeg-bin",
-        ffmpeg_bin or "",
-        "--ffmpeg-threads",
-        str(ffmpeg_threads),
-        "--ffmpeg-timeout",
-        str(ffmpeg_timeout),
-        "--video-encoder",
-        video_encoder,
-        "--normalized-video-bitrate",
-        normalized_video_bitrate,
-        "--video-bitrate",
-        video_bitrate,
     ]
-    if smoothing_style is not None:
-        cmd.extend(["--smoothing-style", smoothing_style])
-    if framing_style is not None:
-        cmd.extend(["--framing-style", framing_style])
-    if min_detector_score is not None:
-        cmd.extend(["--min-detector-score", str(min_detector_score)])
-    if input_is_normalized:
-        cmd.append("--input-is-normalized")
     return cmd

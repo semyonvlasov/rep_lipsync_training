@@ -22,6 +22,7 @@ data/*
 models/official_syncnet/checkpoints/*.pth
 models/official_syncnet/checkpoints/*.pt
 models/official_syncnet/face_detection/detection/sfd/*.pth
+models/face_processing/*.task
 
 *.log
 nohup.out

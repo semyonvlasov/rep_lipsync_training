@@ -5,7 +5,6 @@ runtime:
   ffmpeg_bin: ""
   ffmpeg_threads: 4
   ffmpeg_timeout: 180
-  video_encoder: auto
 
 gdrive:
   remote: "gdrive:"
@@ -13,25 +12,78 @@ gdrive:
     url: "https://drive.google.com/drive/folders/1v06momk8fR-eqw79Z93zczBx_InWsCS9?usp=drive_link"
     folder_id: "1v06momk8fR-eqw79Z93zczBx_InWsCS9"
   processed:
-    url: "https://drive.google.com/drive/folders/1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n?usp=drive_link"
-    folder_id: "1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n"
+    url: "https://drive.google.com/drive/folders/1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52?usp=drive_link"
+    folder_id: "1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52"
 
 source:
   batch_glob: "batch_*"
   complete_flag_name: "fetch_complete.json"
 
 process:
-  faceclip_size: 288
-  processed_fps: 25
-  max_frames: 250
-  detect_every: 1
-  smooth_window: 5
-  smoothing_style: official_inference
-  framing_style: official_inference
-  detector_backend: sfd
-  detector_device: auto
-  detector_batch_size: 4
-  min_detector_score: 0.99999
-  resize_device: auto
-  normalized_video_bitrate: 20m
-  processed_video_bitrate: 600k
+  max_archives: 0
+  keep_failed_artifacts: false
+
+face_processing:
+  save_frame_log: false
+  keep_normalized: false
+
+  normalization:
+    fps: 25
+    bitrate: 20m
+    codec: auto
+    pixel_format: yuv420p
+
+  detection:
+    model_path: models/face_processing/face_landmarker_v2_with_blendshapes.task
+    num_faces: 2
+    min_detection_confidence: 0.85
+    min_presence_confidence: 0.85
+    use_gpu: false
+
+  bad_frame:
+    min_face_h: 180
+    max_abs_yaw: 30.0
+    max_abs_pitch: 25.0
+    max_abs_roll: 20.0
+    max_delta_cx_ratio: 0.08
+    max_delta_cy_ratio: 0.08
+    max_delta_yaw: 10.0
+    max_delta_pitch: 10.0
+    max_delta_roll: 12.0
+    max_face_h_ratio_deviation: 0.12
+    min_confidence: 0.5
+    min_segment_length: 50
+    max_segment_length: 200
+    motion_window_frames: 25
+    max_cumulative_motion_ratio: 0.25
+
+  ranking:
+    conf_mean_abs_yaw: 12.0
+    conf_mean_abs_pitch: 10.0
+    conf_mean_abs_roll: 8.0
+    conf_max_abs_yaw: 20.0
+    conf_max_abs_pitch: 16.0
+    conf_max_abs_roll: 12.0
+    conf_face_size_std_ratio: 0.08
+    conf_std_cx_ratio: 0.04
+    conf_std_cy_ratio: 0.04
+    conf_jump_ratio: 0.02
+    conf_low_conf_ratio: 0.02
+    med_mean_abs_yaw: 18.0
+    med_mean_abs_pitch: 14.0
+    med_mean_abs_roll: 12.0
+    med_max_abs_yaw: 28.0
+    med_max_abs_pitch: 20.0
+    med_max_abs_roll: 18.0
+    med_face_size_std_ratio: 0.15
+    med_std_cx_ratio: 0.08
+    med_std_cy_ratio: 0.08
+    med_jump_ratio: 0.08
+    med_low_conf_ratio: 0.08
+
+  export:
+    mode: stretch_to_square
+    fps: 25
+    bitrate: 600k
+    codec: auto
+    pixel_format: yuv420p

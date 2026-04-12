@@ -59,7 +59,6 @@ from dataset_prepare.common.config import (
     ConfigError,
     exit_with_config_error,
     get_bool,
-    get_float,
     get_int,
     get_str,
     load_stage_config,
@@ -174,6 +173,7 @@ def build_archive_state(
     }
 def build_export_cmd(args, export_script: Path, state: dict) -> list[str]:
     return build_faceclip_export_cmd(
+        config_path=Path(args.process_config),
         python_bin=args.python_bin,
         export_script=export_script,
         input_dir=Path(state["extract_root"]),
@@ -181,25 +181,6 @@ def build_export_cmd(args, export_script: Path, state: dict) -> list[str]:
         normalized_dir=Path(state["normalize_root"]),
         source_archive=state["source_archive"],
         dataset_kind=state["dataset_kind"],
-        size=args.size,
-        fps=args.fps,
-        max_frames=args.max_frames,
-        detect_every=args.detect_every,
-        smooth_window=args.smooth_window,
-        detector_backend=args.detector_backend,
-        detector_device=args.detector_device,
-        detector_batch_size=args.detector_batch_size,
-        resize_device=args.resize_device,
-        ffmpeg_bin=args.ffmpeg_bin or "",
-        ffmpeg_threads=args.ffmpeg_threads,
-        ffmpeg_timeout=args.ffmpeg_timeout,
-        video_encoder=args.video_encoder,
-        normalized_video_bitrate=args.normalized_video_bitrate,
-        video_bitrate=args.video_bitrate,
-        smoothing_style=args.smoothing_style,
-        framing_style=args.framing_style,
-        min_detector_score=args.min_detector_score,
-        input_is_normalized=bool(state.get("input_is_normalized")),
     )
 
 
@@ -406,32 +387,7 @@ def parse_args(default_config: Path) -> argparse.Namespace:
     parser.add_argument("--archive-glob", default=None)
     parser.add_argument("--max-archives", type=int, default=None, help="0=all pending")
     parser.add_argument("--python-bin", default=None)
-    parser.add_argument("--size", type=int, default=None)
-    parser.add_argument("--fps", type=int, default=None)
-    parser.add_argument("--max-frames", type=int, default=None)
-    parser.add_argument("--detect-every", type=int, default=None)
-    parser.add_argument("--smooth-window", type=int, default=None)
-    parser.add_argument(
-        "--smoothing-style",
-        choices=["legacy_centered", "official_inference", "none"],
-        default=None,
-    )
-    parser.add_argument(
-        "--framing-style",
-        choices=["legacy_square", "official_inference"],
-        default=None,
-    )
-    parser.add_argument("--detector-backend", choices=["opencv", "sfd"], default=None)
-    parser.add_argument("--detector-device", choices=["auto", "cpu", "cuda", "mps"], default=None)
-    parser.add_argument("--detector-batch-size", type=int, default=None)
-    parser.add_argument("--min-detector-score", type=float, default=None)
-    parser.add_argument("--resize-device", choices=["auto", "cpu", "cuda", "mps"], default=None)
-    parser.add_argument("--ffmpeg-bin", default=None)
-    parser.add_argument("--ffmpeg-threads", type=int, default=None)
-    parser.add_argument("--ffmpeg-timeout", type=int, default=None)
-    parser.add_argument("--video-encoder", default=None)
-    parser.add_argument("--normalized-video-bitrate", default=None)
-    parser.add_argument("--video-bitrate", default=None)
+    parser.add_argument("--process-config", default=None, help="Path to the YAML config forwarded into the exporter")
     parser.add_argument("--keep-failed-artifacts", dest="keep_failed_artifacts", action="store_true", default=None)
     parser.add_argument("--no-keep-failed-artifacts", dest="keep_failed_artifacts", action="store_false")
     return parser.parse_args()
@@ -453,45 +409,7 @@ def main() -> int:
         args.max_archives if args.max_archives is not None else get_int(config, "process", "max_archives")
     )
     args.python_bin = args.python_bin or get_str(config, "runtime", "python_bin")
-    args.size = args.size if args.size is not None else get_int(config, "process", "faceclip_size")
-    args.fps = args.fps if args.fps is not None else get_int(config, "process", "processed_fps")
-    args.max_frames = (
-        args.max_frames if args.max_frames is not None else get_int(config, "process", "max_frames")
-    )
-    args.detect_every = (
-        args.detect_every if args.detect_every is not None else get_int(config, "process", "detect_every")
-    )
-    args.smooth_window = (
-        args.smooth_window if args.smooth_window is not None else get_int(config, "process", "smooth_window")
-    )
-    args.smoothing_style = args.smoothing_style or get_str(config, "process", "smoothing_style")
-    args.framing_style = args.framing_style or get_str(config, "process", "framing_style")
-    args.detector_backend = args.detector_backend or get_str(config, "process", "detector_backend")
-    args.detector_device = args.detector_device or get_str(config, "process", "detector_device")
-    args.detector_batch_size = (
-        args.detector_batch_size
-        if args.detector_batch_size is not None
-        else get_int(config, "process", "detector_batch_size")
-    )
-    args.min_detector_score = (
-        args.min_detector_score
-        if args.min_detector_score is not None
-        else get_float(config, "process", "min_detector_score")
-    )
-    args.resize_device = args.resize_device or get_str(config, "process", "resize_device")
-    if args.ffmpeg_bin is None:
-        args.ffmpeg_bin = get_str(config, "runtime", "ffmpeg_bin", allow_empty=True)
-    args.ffmpeg_threads = (
-        args.ffmpeg_threads if args.ffmpeg_threads is not None else get_int(config, "runtime", "ffmpeg_threads")
-    )
-    args.ffmpeg_timeout = (
-        args.ffmpeg_timeout if args.ffmpeg_timeout is not None else get_int(config, "runtime", "ffmpeg_timeout")
-    )
-    args.video_encoder = args.video_encoder or get_str(config, "runtime", "video_encoder")
-    args.normalized_video_bitrate = args.normalized_video_bitrate or get_str(
-        config, "process", "normalized_video_bitrate"
-    )
-    args.video_bitrate = args.video_bitrate or get_str(config, "process", "processed_video_bitrate")
+    args.process_config = args.process_config or str(resolve_repo_path(REPO_ROOT, str(args.config)))
     args.keep_failed_artifacts = (
         args.keep_failed_artifacts
         if args.keep_failed_artifacts is not None
@@ -530,11 +448,7 @@ def main() -> int:
 
     log(f"[RawFaceclipCycle] source_folder_id={args.source_folder_id}")
     log(f"[RawFaceclipCycle] dest_folder_id={args.dest_folder_id}")
-    log(
-        f"[RawFaceclipCycle] export_defaults size={args.size} detector={args.detector_backend} "
-        f"detect_every={args.detect_every} smoothing={args.smoothing_style} "
-        f"smooth_window={args.smooth_window} framing={args.framing_style}"
-    )
+    log(f"[RawFaceclipCycle] process_config={args.process_config}")
     log(f"[RawFaceclipCycle] state_manifest={state_path}")
 
     processed_count = 0

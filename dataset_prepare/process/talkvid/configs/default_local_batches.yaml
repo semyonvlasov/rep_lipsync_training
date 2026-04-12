@@ -39,8 +39,7 @@ local_batches:
   max_batches: 0
 
 source:
-  # Exporter/runtime tag written into metadata and used for source-specific
-  # quality-tier behavior.
+  # Exporter/runtime provenance tag written into segment metadata.
   dataset_kind: talkvid
 
   # Reconstructed source archive name stored in manifests and sample metadata:

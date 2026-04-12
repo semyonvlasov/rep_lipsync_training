@@ -52,7 +52,7 @@ FACECLIP_REMOTE_ARCHIVE_MANIFEST ?= training/output/raw_faceclips_x288_cycle/arc
 FACECLIP_REMOTE_CYCLE_LOG ?= training/output/raw_faceclips_x288_cycle/cycle.log
 FACECLIP_REMOTE_CYCLE_PID ?= training/output/raw_faceclips_x288_cycle/cycle.pid
 DATASET_REMOTE ?= gdrive:
-DATASET_FOLDER_ID ?= 1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n
+DATASET_FOLDER_ID ?= 1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52
 DATASET_ARCHIVE_GLOB ?= *faceclips*.tar
 DATASET_MAX_ARCHIVES ?= 0
 DATASET_MANIFEST_PATH ?= output/faceclip_merge/merge_manifest.jsonl
@@ -124,13 +124,13 @@ PUBLISH_SKIP_UPLOAD ?= 0
 help:
 	@echo "Available targets:"
 	@echo "  make bootstrap-fetch # install local fetch deps on macOS or Debian/Ubuntu and create $(FETCH_VENV)"
-	@echo "  make bootstrap-process-lazy # install local raw->lazy processing deps on Debian/Ubuntu and prewarm SFD"
+	@echo "  make bootstrap-process-lazy # install local raw->lazy processing deps on Debian/Ubuntu"
 	@echo "  make remote-bootstrap-process-lazy # prepare a remote Linux box for raw->lazy processing over SSH"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
 	@echo "  make remote-sync-code # clone/pull the latest repo on a remote box and sync the official SyncNet checkpoint"
 	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box and verify torch/CUDA compatibility"
 	@echo "  make remote-rclone-config # upload local rclone.conf so the remote can access Drive"
-	@echo "  make remote-prewarm-sfd # instantiate the SFD detector once so the checkpoint is cached on the remote"
+	@echo "  make remote-prewarm-sfd # legacy SFD checkpoint warmup (not used by the current face_processing pipeline)"
 	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
 	@echo "  make remote-observe-system # start the remote system observer"
 	@echo "  make remote-bootstrap # sync code, install deps, and start the remote observer"
@@ -165,7 +165,7 @@ help:
 	@echo "  OFFICIAL_SYNCNET_CKPT=/abs/path/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_URL=https://drive.google.com/open?id=..."
 	@echo "  OFFICIAL_SYNCNET_SKIP_UPLOAD=1"
-	@echo "  DATASET_FOLDER_ID=1xx2IlfiAYC1AFf3xJwcjeTEsAK-Uqt8n"
+	@echo "  DATASET_FOLDER_ID=1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52"
 	@echo "  DATASET_MANIFEST_PATH=output/faceclip_merge/merge_manifest.jsonl"
 	@echo "  DATASET_INCLUDE_TIERS=\"confident medium\""
 	@echo "  DATASET_RELOAD=1  # ignore merge manifest and revisit all archives"
@@ -246,11 +246,6 @@ bootstrap-fetch:
 	echo "activate with: source $(FETCH_VENV)/bin/activate"
 
 bootstrap-process-lazy: server-setup
-	@if [ "$(PROCESS_PREWARM_SFD)" = "1" ]; then \
-		cd "$(TRAINING_ROOT)"; \
-		PYTHONPATH="$(REPO_ROOT)/models/official_syncnet:$(TRAINING_ROOT):$(REPO_ROOT)" \
-			$(PYTHON) -c "from face_detection import FaceAlignment, LandmarksType; FaceAlignment(LandmarksType._2D, device='cpu', flip_input=False, face_detector='sfd'); print('SFD checkpoint cached')"; \
-	fi
 	@echo "bootstrap-process-lazy complete"
 
 server-setup:
@@ -377,7 +372,7 @@ remote-observe-system:
 remote-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remote-fetch-official-syncnet remote-observe-system
 	@echo "remote-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
 
-remote-bootstrap-process-lazy: remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd
+remote-bootstrap-process-lazy: remote-sync-code remote-server-setup remote-rclone-config
 	-@$(MAKE) remote-observe-system REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" SYSTEM_WATCH_INTERVAL="$(SYSTEM_WATCH_INTERVAL)"
 	@echo "remote-bootstrap-process-lazy complete: $(REMOTE):$(REMOTE_ROOT)"
 

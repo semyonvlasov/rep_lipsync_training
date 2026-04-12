@@ -17,7 +17,6 @@ from dataset_prepare.common.config import (
     discover_stage_paths,
     exit_with_config_error,
     get_bool,
-    get_float,
     get_int,
     get_str,
     load_stage_config,
@@ -43,10 +42,6 @@ def main() -> int:
         _, config = load_stage_config(args.config, EXPECTED_STAGE)
 
         python_bin = get_str(config, "runtime", "python_bin")
-        ffmpeg_bin = get_str(config, "runtime", "ffmpeg_bin", allow_empty=True)
-        ffmpeg_threads = get_int(config, "runtime", "ffmpeg_threads")
-        ffmpeg_timeout = get_int(config, "runtime", "ffmpeg_timeout")
-        video_encoder = get_str(config, "runtime", "video_encoder")
 
         gdrive_remote = get_str(config, "gdrive", "remote")
         processed_folder_id = get_str(config, "gdrive", "processed", "folder_id")
@@ -93,42 +88,8 @@ def main() -> int:
             get_str(config, "source", "complete_flag_name"),
             "--max-batches",
             str(get_int(config, "local_batches", "max_batches")),
-            "--size",
-            str(get_int(config, "process", "faceclip_size")),
-            "--fps",
-            str(get_int(config, "process", "processed_fps")),
-            "--max-frames",
-            str(get_int(config, "process", "max_frames")),
-            "--detect-every",
-            str(get_int(config, "process", "detect_every")),
-            "--smooth-window",
-            str(get_int(config, "process", "smooth_window")),
-            "--smoothing-style",
-            get_str(config, "process", "smoothing_style"),
-            "--framing-style",
-            get_str(config, "process", "framing_style"),
-            "--detector-backend",
-            get_str(config, "process", "detector_backend"),
-            "--detector-device",
-            get_str(config, "process", "detector_device"),
-            "--detector-batch-size",
-            str(get_int(config, "process", "detector_batch_size")),
-            "--min-detector-score",
-            str(get_float(config, "process", "min_detector_score")),
-            "--resize-device",
-            get_str(config, "process", "resize_device"),
-            "--ffmpeg-bin",
-            ffmpeg_bin,
-            "--ffmpeg-threads",
-            str(ffmpeg_threads),
-            "--ffmpeg-timeout",
-            str(ffmpeg_timeout),
-            "--video-encoder",
-            video_encoder,
-            "--normalized-video-bitrate",
-            get_str(config, "process", "normalized_video_bitrate"),
-            "--video-bitrate",
-            get_str(config, "process", "processed_video_bitrate"),
+            "--process-config",
+            str(resolve_repo_path(paths.repo_root, args.config)),
         ]
 
         if get_bool(config, "local_batches", "follow"):

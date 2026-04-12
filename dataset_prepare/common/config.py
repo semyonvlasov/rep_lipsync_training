@@ -134,6 +134,19 @@ def load_stage_config(config_path: str | Path, expected_stage: str) -> tuple[Pat
     return path, loaded
 
 
+def load_yaml_config(config_path: str | Path) -> tuple[Path, dict[str, Any]]:
+    if yaml is None:
+        raise ConfigError(
+            "PyYAML is not installed for the active interpreter. "
+            "Activate the fetch venv or run the process bootstrap before launching YAML-based stages."
+        ) from _YAML_IMPORT_ERROR
+
+    path = resolve_config_path(config_path)
+    if not path.is_file():
+        raise ConfigError(f"missing config: {path}")
+    return path, _load_yaml_config_tree(path)
+
+
 def get_value(config: dict[str, Any], *keys: str, default: Any = _MISSING) -> Any:
     node: Any = config
     walked: list[str] = []
