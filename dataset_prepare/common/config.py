@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from copy import deepcopy
+import json
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -59,8 +61,41 @@ def resolve_config_path(config_path: str | Path) -> Path:
 
 
 def _read_yaml_mapping(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        loaded = yaml.safe_load(handle) or {}
+    if yaml is not None:
+        with path.open("r", encoding="utf-8") as handle:
+            loaded = yaml.safe_load(handle) or {}
+    else:
+        ruby_bin = shutil.which("ruby")
+        if not ruby_bin:
+            raise ConfigError(
+                "PyYAML is not installed for the active interpreter and ruby is not available "
+                f"to parse YAML configs: {path}"
+            ) from _YAML_IMPORT_ERROR
+
+        proc = subprocess.run(
+            [
+                ruby_bin,
+                "-rjson",
+                "-ryaml",
+                "-e",
+                "payload = YAML.load_file(ARGV[0]) || {}; print JSON.dump(payload)",
+                str(path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            raise ConfigError(
+                "failed to parse YAML config via ruby fallback: "
+                f"{path}: {detail or f'rc={proc.returncode}'}"
+            ) from _YAML_IMPORT_ERROR
+        try:
+            loaded = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise ConfigError(f"ruby YAML fallback produced invalid JSON for {path}") from exc
+
     if not isinstance(loaded, dict):
         raise ConfigError(f"config root must be a mapping: {path}")
     return loaded
@@ -113,12 +148,6 @@ def _load_yaml_config_tree(path: Path, *, stack: tuple[Path, ...] = ()) -> dict[
 
 
 def load_stage_config(config_path: str | Path, expected_stage: str) -> tuple[Path, dict[str, Any]]:
-    if yaml is None:
-        raise ConfigError(
-            "PyYAML is not installed for the active interpreter. "
-            "Activate the fetch venv or run the process bootstrap before launching YAML-based stages."
-        ) from _YAML_IMPORT_ERROR
-
     path = resolve_config_path(config_path)
     if not path.is_file():
         raise ConfigError(f"missing config: {path}")
@@ -135,12 +164,6 @@ def load_stage_config(config_path: str | Path, expected_stage: str) -> tuple[Pat
 
 
 def load_yaml_config(config_path: str | Path) -> tuple[Path, dict[str, Any]]:
-    if yaml is None:
-        raise ConfigError(
-            "PyYAML is not installed for the active interpreter. "
-            "Activate the fetch venv or run the process bootstrap before launching YAML-based stages."
-        ) from _YAML_IMPORT_ERROR
-
     path = resolve_config_path(config_path)
     if not path.is_file():
         raise ConfigError(f"missing config: {path}")

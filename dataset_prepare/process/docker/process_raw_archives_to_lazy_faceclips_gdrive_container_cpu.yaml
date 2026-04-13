@@ -1,0 +1,17 @@
+# CPU-only raw-Drive processor defaults for disposable Docker workers.
+# This file belongs to the Docker launch path only. The direct/raw host
+# pipeline keeps using dataset_prepare/process/configs/*.yaml unchanged.
+
+extends: ../configs/process_raw_archives_to_lazy_faceclips_gdrive.yaml
+
+runtime:
+  python_bin: python3
+
+paths:
+  processing_folder: /workspace-data/process/raw_faceclips_cycle
+  manifest_path: /workspace-data/process/raw_faceclips_cycle/archive_manifest.jsonl
+
+face_processing:
+  detection:
+    use_gpu: false
+    model_path: /workspace/repo/models/face_processing/face_landmarker_v2_with_blendshapes.task

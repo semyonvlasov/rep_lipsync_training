@@ -205,13 +205,29 @@ def process_archive_state(
 
     stage = str(state.get("stage", "claimed"))
 
-    if output_name in dest_archives and stage == "claimed":
+    if output_name in dest_archives and stage in {"claimed", "download_started"}:
         append_state_event(manifest_path, state, "skip_already_uploaded")
         cleanup_paths([local_tar, extract_root, normalize_root, export_root, processed_tar])
         remove_state_manifest(state_path)
         return
 
     if stage in {"claimed", "download_started"}:
+        try:
+            remote_names = set(rclone_lsf(args.remote, args.source_folder_id))
+        except Exception:
+            remote_names = set()
+
+        if claimed_name not in remote_names and archive_name in remote_names:
+            cleanup_paths([local_tar, extract_root, normalize_root, export_root, processed_tar])
+            append_state_event(
+                manifest_path,
+                state,
+                "resume_claim_reset",
+                detail=f"missing claimed archive {claimed_name}; source archive {archive_name} is pending again",
+            )
+            remove_state_manifest(state_path)
+            return
+
         # Partial downloads are not resumable; start the claimed archive from a
         # clean local slate and fetch it again.
         cleanup_paths([local_tar, extract_root, normalize_root, export_root, processed_tar])

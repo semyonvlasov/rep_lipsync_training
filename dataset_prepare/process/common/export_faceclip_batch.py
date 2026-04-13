@@ -32,7 +32,9 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import fields
 from pathlib import Path
@@ -362,6 +364,157 @@ def process_one_video(
     return result, result_to_manifest_entries(result, source_name, promoted_payloads)
 
 
+def cleanup_video_artifacts(*, video_path: Path, batch_output_dir: Path, work_root: Path) -> None:
+    source_name = video_path.stem
+    shutil.rmtree(work_root / source_name, ignore_errors=True)
+    reports_dir = batch_output_dir / "reports"
+    for path in reports_dir.glob(f"{source_name}_*"):
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    for tier in QUALITY_TIERS:
+        tier_dir = batch_output_dir / tier
+        for path in tier_dir.glob(f"{source_name}_seg_*"):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def write_gpu_override_config(config_path: Path, *, use_gpu: bool) -> Path:
+    handle = tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=".yaml",
+        prefix="faceclip_export_",
+        delete=False,
+    )
+    with handle:
+        handle.write(f"extends: {config_path}\n\n")
+        handle.write("face_processing:\n")
+        handle.write("  detection:\n")
+        handle.write(f"    use_gpu: {'true' if use_gpu else 'false'}\n")
+    return Path(handle.name)
+
+
+def run_video_worker(
+    *,
+    config_path: Path,
+    video_path: Path,
+    source_archive: str,
+    dataset_kind: str,
+    batch_output_dir: Path,
+    work_root: Path,
+    use_gpu: bool,
+) -> tuple[int, list[dict] | None]:
+    cleanup_video_artifacts(video_path=video_path, batch_output_dir=batch_output_dir, work_root=work_root)
+
+    worker_result = work_root / f"{video_path.stem}.worker_result.json"
+    try:
+        worker_result.unlink()
+    except OSError:
+        pass
+
+    worker_config_path = write_gpu_override_config(config_path, use_gpu=use_gpu)
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--config",
+        str(worker_config_path),
+        "--input-dir",
+        str(video_path.parent),
+        "--output-dir",
+        str(batch_output_dir),
+        "--normalized-dir",
+        str(work_root),
+        "--source-archive",
+        source_archive,
+        "--dataset-kind",
+        dataset_kind,
+        "--worker-video-path",
+        str(video_path),
+        "--worker-result-path",
+        str(worker_result),
+    ]
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            line = line.rstrip()
+            if line:
+                print(line, flush=True)
+        rc = process.wait()
+        payload = load_json(worker_result)
+        if isinstance(payload, dict):
+            entries = payload.get("segment_entries")
+            if isinstance(entries, list):
+                return rc, entries
+        return rc, None
+    finally:
+        try:
+            worker_result.unlink()
+        except OSError:
+            pass
+        try:
+            worker_config_path.unlink()
+        except OSError:
+            pass
+
+
+def worker_main(args: argparse.Namespace) -> int:
+    if not args.worker_video_path or not args.worker_result_path:
+        raise SystemExit("worker mode requires --worker-video-path and --worker-result-path")
+
+    try:
+        config_path, config = load_yaml_config(args.config)
+    except ConfigError as exc:
+        log(f"[FaceclipExport] config_error={exc}")
+        return 2
+
+    input_dir = Path(args.input_dir)
+    output_dir = Path(args.output_dir)
+    work_root = Path(args.normalized_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    work_root.mkdir(parents=True, exist_ok=True)
+
+    pipeline_cfg, _ = build_face_processing_config(config_path, config, work_root)
+    dataset_kind = resolve_dataset_kind(args.dataset_kind, args.source_archive, input_dir)
+    video_path = Path(args.worker_video_path)
+
+    try:
+        _, segment_entries = process_one_video(
+            video_path=video_path,
+            dataset_kind=dataset_kind,
+            source_archive=args.source_archive,
+            batch_output_dir=output_dir,
+            work_root=work_root,
+            pipeline_cfg=pipeline_cfg,
+        )
+    except Exception as exc:
+        segment_entries = [
+            {
+                "name": video_path.stem,
+                "status": "fail",
+                "tier": None,
+                "message": f"{video_path.stem}: unexpected_fail ({type(exc).__name__}: {exc})",
+                "source_segment_start_frame": 0,
+                "source_segment_end_frame": -1,
+                "segment_index": 1,
+                "segment_count": 1,
+            }
+        ]
+
+    write_json(Path(args.worker_result_path), {"segment_entries": segment_entries})
+    return 0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Path to the process-stage YAML config")
@@ -374,11 +527,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--source-archive", default="", help="Source archive name for provenance")
     parser.add_argument("--dataset-kind", choices=["auto", "talkvid", "hdtf"], default="auto")
+    parser.add_argument("--worker-video-path", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--worker-result-path", default=None, help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    if args.worker_video_path or args.worker_result_path:
+        return worker_main(args)
 
     try:
         config_path, config = load_yaml_config(args.config)
@@ -439,22 +597,37 @@ def main() -> int:
         log("[FaceclipExport] resume_at_end=true; no source videos left to export")
 
     for idx, video_path in enumerate(videos[start_video_index:], start=start_video_index + 1):
-        try:
-            result, segment_entries = process_one_video(
+        rc, segment_entries = run_video_worker(
+            config_path=config_path,
+            video_path=video_path,
+            source_archive=args.source_archive,
+            dataset_kind=dataset_kind,
+            batch_output_dir=output_dir,
+            work_root=work_root,
+            use_gpu=bool(pipeline_cfg.detection.use_gpu),
+        )
+        if rc != 0 and pipeline_cfg.detection.use_gpu:
+            log(
+                f"[FaceclipExport] gpu_worker_failed source_video={video_path.name} rc={rc}; "
+                "retrying on CPU"
+            )
+            rc, segment_entries = run_video_worker(
+                config_path=config_path,
                 video_path=video_path,
-                dataset_kind=dataset_kind,
                 source_archive=args.source_archive,
+                dataset_kind=dataset_kind,
                 batch_output_dir=output_dir,
                 work_root=work_root,
-                pipeline_cfg=pipeline_cfg,
+                use_gpu=False,
             )
-        except Exception as exc:
+
+        if segment_entries is None:
             segment_entries = [
                 {
                     "name": video_path.stem,
                     "status": "fail",
                     "tier": None,
-                    "message": f"{video_path.stem}: unexpected_fail ({type(exc).__name__}: {exc})",
+                    "message": f"{video_path.stem}: worker_failed (rc={rc})",
                     "source_segment_start_frame": 0,
                     "source_segment_end_frame": -1,
                     "segment_index": 1,

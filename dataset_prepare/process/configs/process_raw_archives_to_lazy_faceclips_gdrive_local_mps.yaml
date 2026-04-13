@@ -1,0 +1,13 @@
+# Local macOS/MPS raw-Drive processor defaults.
+# This keeps the same Drive folders and processing paths as the shared raw
+# processor, but uses the local face_processing venv and local MediaPipe model.
+
+extends: process_raw_archives_to_lazy_faceclips_gdrive.yaml
+
+runtime:
+  python_bin: /Users/semenvlasov/Documents/repos/face_processing/.venv/bin/python
+
+face_processing:
+  detection:
+    model_path: /Users/semenvlasov/Documents/repos/face_processing/assets/face_landmarker_v2_with_blendshapes.task
+    use_gpu: true

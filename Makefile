@@ -23,6 +23,16 @@ REMOTE_TORCH_VERSION ?= 2.10.0
 REMOTE_TORCHVISION_VERSION ?= 0.25.0
 REMOTE_TORCHAUDIO_VERSION ?= 2.10.0
 REMOTE_TORCH_INDEX_URL ?= https://download.pytorch.org/whl/cu128
+FACE_PROCESSING_MODEL_PATH ?=
+FACE_PROCESSING_MODEL_REPO_PATH ?= $(REPO_ROOT)/models/face_processing/face_landmarker_v2_with_blendshapes.task
+FACE_PROCESSING_MODEL_FALLBACK_PATH ?= $(abspath $(REPO_ROOT)/../../face_processing/assets/face_landmarker_v2_with_blendshapes.task)
+REMOTE_FACE_PROCESSING_MODEL_PATH ?= $(REMOTE_ROOT)/models/face_processing/face_landmarker_v2_with_blendshapes.task
+DOCKER_PROCESS_IMAGE ?= rep-lipsync-process-cpu:latest
+DOCKER_PROCESS_CONTAINER ?= rep-lipsync-process-cpu
+DOCKER_PROCESS_CONFIG_PATH ?= dataset_prepare/process/docker/process_raw_archives_to_lazy_faceclips_gdrive_container_cpu.yaml
+DOCKER_PROCESS_DATA_ROOT ?= /root/.cache/rep_lipsync_training/process-docker
+DOCKER_PROCESS_PID_PATH ?= $(DOCKER_PROCESS_DATA_ROOT)/process.pid
+DOCKER_PROCESS_LOG_PATH ?= $(DOCKER_PROCESS_DATA_ROOT)/process/logs/raw_drive.log
 
 SERVER_PY_REQUIREMENTS := $(TRAINING_ROOT)/requirements-server.txt
 FETCH_VENV ?= $(REPO_ROOT)/.venv-fetch
@@ -119,17 +129,21 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
 	@echo "  make bootstrap-fetch # install local fetch deps on macOS or Debian/Ubuntu and create $(FETCH_VENV)"
 	@echo "  make bootstrap-process-lazy # install local raw->lazy processing deps on Debian/Ubuntu"
 	@echo "  make remote-bootstrap-process-lazy # prepare a remote Linux box for raw->lazy processing over SSH"
+	@echo "  make remote-bootstrap-process-docker # prepare a remote Linux box for disposable Docker CPU processing over SSH"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
 	@echo "  make remote-sync-code # clone/pull the latest repo on a remote box and sync the official SyncNet checkpoint"
 	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box and verify torch/CUDA compatibility"
 	@echo "  make remote-rclone-config # upload local rclone.conf so the remote can access Drive"
+	@echo "  make remote-docker-process-start # start the disposable Docker CPU raw->lazy worker on a remote"
+	@echo "  make remote-docker-process-stop # stop the disposable Docker CPU raw->lazy worker on a remote"
+	@echo "  make remote-docker-process-tail # tail the disposable Docker CPU worker log on a remote"
 	@echo "  make remote-prewarm-sfd # legacy SFD checkpoint warmup (not used by the current face_processing pipeline)"
 	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
 	@echo "  make remote-observe-system # start the remote system observer"
@@ -161,6 +175,7 @@ help:
 	@echo "  REMOTE_ENSURE_TORCH_CUDA=1"
 	@echo "  REMOTE_TORCH_VERSION=2.10.0"
 	@echo "  REMOTE_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128"
+	@echo "  FACE_PROCESSING_MODEL_PATH=/abs/path/face_landmarker_v2_with_blendshapes.task"
 	@echo "  FACECLIP_MONITOR_NAME=remote-3090 # optional override if different from REMOTE_NAME"
 	@echo "  OFFICIAL_SYNCNET_CKPT=/abs/path/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_URL=https://drive.google.com/open?id=..."
@@ -201,6 +216,7 @@ help:
 	@echo "  make remote-rclone-config REMOTE=root@ssh9.vast.ai PORT=24380"
 	@echo "  ssh -p 24380 root@ssh9.vast.ai 'cd /root/lipsync_test/rep_lipsync_training && make bootstrap-process-lazy PYTHON=python3'"
 	@echo "  make remote-bootstrap-process-lazy REMOTE=root@ssh9.vast.ai PORT=24380 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training REMOTE_PYTHON=python3"
+	@echo "  make remote-bootstrap-process-docker REMOTE=root@192.168.1.34 PORT=22 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training FACE_PROCESSING_MODEL_PATH=/Users/semenvlasov/Documents/repos/face_processing/assets/face_landmarker_v2_with_blendshapes.task"
 
 bootstrap-fetch:
 	@set -euo pipefail; \
@@ -375,6 +391,104 @@ remote-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remo
 remote-bootstrap-process-lazy: remote-sync-code remote-server-setup remote-rclone-config
 	-@$(MAKE) remote-observe-system REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" SYSTEM_WATCH_INTERVAL="$(SYSTEM_WATCH_INTERVAL)"
 	@echo "remote-bootstrap-process-lazy complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-docker-host-setup:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		if ! command -v apt-get >/dev/null 2>&1; then \
+			echo 'remote-docker-host-setup is intended for Ubuntu/Debian hosts with apt-get'; \
+			exit 1; \
+		fi; \
+		sudo_cmd=''; \
+		if [ \"\$$(id -u)\" -ne 0 ]; then \
+			sudo_cmd='sudo'; \
+		fi; \
+		\$$sudo_cmd apt-get update; \
+		DEBIAN_FRONTEND=noninteractive \$$sudo_cmd apt-get install -y ca-certificates docker.io; \
+		\$$sudo_cmd systemctl enable --now docker; \
+		docker --version; \
+	"
+	@echo "remote-docker-host-setup complete: $(REMOTE)"
+
+remote-docker-process-model:
+	@set -euo pipefail; \
+	model_src="$(FACE_PROCESSING_MODEL_PATH)"; \
+	if [ -z "$$model_src" ]; then \
+		if [ -f "$(FACE_PROCESSING_MODEL_REPO_PATH)" ]; then \
+			model_src="$(FACE_PROCESSING_MODEL_REPO_PATH)"; \
+		elif [ -f "$(FACE_PROCESSING_MODEL_FALLBACK_PATH)" ]; then \
+			model_src="$(FACE_PROCESSING_MODEL_FALLBACK_PATH)"; \
+		else \
+			echo "remote-docker-process-model: missing face_processing model; set FACE_PROCESSING_MODEL_PATH=/abs/path/face_landmarker_v2_with_blendshapes.task"; \
+			exit 1; \
+		fi; \
+	fi; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		mkdir -p '$(REMOTE_ROOT)/models/face_processing'; \
+	"; \
+	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$(PORT)" \
+		"$$model_src" "$(REMOTE):$(REMOTE_FACE_PROCESSING_MODEL_PATH)"
+	@echo "remote-docker-process-model complete: $(REMOTE):$(REMOTE_FACE_PROCESSING_MODEL_PATH)"
+
+remote-docker-process-build:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		cd '$(REMOTE_ROOT)'; \
+		docker build -f dataset_prepare/process/docker/Dockerfile.cpu -t '$(DOCKER_PROCESS_IMAGE)' .; \
+	"
+	@echo "remote-docker-process-build complete: $(REMOTE):$(DOCKER_PROCESS_IMAGE)"
+
+remote-bootstrap-process-docker: remote-sync-code remote-rclone-config remote-docker-host-setup remote-docker-process-model remote-docker-process-build
+	@echo "remote-bootstrap-process-docker complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-docker-process-start:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
+		set -euo pipefail; \
+		pid_file=\"$(DOCKER_PROCESS_PID_PATH)\"; \
+		if [ -f \"\$$pid_file\" ]; then \
+			existing_pid=\$$(cat \"\$$pid_file\" 2>/dev/null || true); \
+			if [ -n \"\$$existing_pid\" ] && ps -p \"\$$existing_pid\" >/dev/null 2>&1; then \
+				echo \"docker process already running pid=\$$existing_pid\"; \
+				exit 1; \
+			fi; \
+			rm -f \"\$$pid_file\"; \
+		fi; \
+		mkdir -p \"$(DOCKER_PROCESS_DATA_ROOT)/process/logs\"; \
+		cd \"$(REMOTE_ROOT)\"; \
+		nohup env DATA_ROOT=\"$(DOCKER_PROCESS_DATA_ROOT)\" IMAGE_TAG=\"$(DOCKER_PROCESS_IMAGE)\" CONTAINER_NAME=\"$(DOCKER_PROCESS_CONTAINER)\" RCLONE_CONFIG_PATH=\"$(REMOTE_RCLONE_CONFIG)\" MODEL_PATH=\"$(REMOTE_FACE_PROCESSING_MODEL_PATH)\" CONFIG_PATH=\"$(DOCKER_PROCESS_CONFIG_PATH)\" SKIP_BUILD=1 dataset_prepare/process/docker/run_raw_drive_cpu_container.sh < /dev/null > /dev/null 2>&1 & \
+		pid=\$$!; \
+		echo \"\$$pid\" > \"\$$pid_file\"; \
+		sleep 1; \
+		ps -p \"\$$pid\" >/dev/null; \
+		echo \"started pid=\$$pid\"; \
+	'"
+	@echo "remote-docker-process-start complete: $(REMOTE):$(PORT)"
+
+remote-docker-process-stop:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
+		set -euo pipefail; \
+		pid_file=\"$(DOCKER_PROCESS_PID_PATH)\"; \
+		if [ -f \"\$$pid_file\" ]; then \
+			existing_pid=\$$(cat \"\$$pid_file\" 2>/dev/null || true); \
+			if [ -n \"\$$existing_pid\" ] && ps -p \"\$$existing_pid\" >/dev/null 2>&1; then \
+				kill \"\$$existing_pid\" 2>/dev/null || true; \
+				sleep 1; \
+			fi; \
+			rm -f \"\$$pid_file\"; \
+		fi; \
+		docker rm -f \"$(DOCKER_PROCESS_CONTAINER)\" >/dev/null 2>&1 || true; \
+		echo \"stopped\"; \
+	'"
+	@echo "remote-docker-process-stop complete: $(REMOTE):$(PORT)"
+
+remote-docker-process-tail:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
+		set -euo pipefail; \
+		mkdir -p \"$(dir $(DOCKER_PROCESS_LOG_PATH))\"; \
+		touch \"$(DOCKER_PROCESS_LOG_PATH)\"; \
+		tail -n 100 -f \"$(DOCKER_PROCESS_LOG_PATH)\"; \
+	'"
 
 remote-faceclip-register:
 	@mkdir -p "$(FACECLIP_MONITOR_DIR)"

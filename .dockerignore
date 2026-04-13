@@ -1,0 +1,13 @@
+.git
+.DS_Store
+.venv
+.venv-*
+__pycache__
+*.pyc
+
+data/
+training/data/
+training/output/
+training/snapshots/
+
+docs/handoffs/
