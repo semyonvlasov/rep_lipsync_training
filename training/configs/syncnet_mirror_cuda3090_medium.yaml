@@ -43,7 +43,7 @@ data:
   cache_size: 16
   skip_bad_samples: true
   sync_alignment:
-    syncnet_checkpoint: "training/output/syncnet_current_best_20260406/syncnet_best_off_eval.pth"
+    syncnet_checkpoint: "output/syncnet_current_best_20260406/syncnet_best_off_eval.pth"
 
 training:
   device: "cuda"
