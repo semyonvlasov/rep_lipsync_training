@@ -30,7 +30,7 @@ fetch:
   max_rate_limit_cooldowns: 2
   download_max_height: 1080
   download_min_duration: 4.0
-  download_max_duration: 6.5
+  download_max_duration: 10
   download_min_width: 720
   download_min_height: 720
   # Minimum TalkVid metadata dover_scores value required to keep a clip.
