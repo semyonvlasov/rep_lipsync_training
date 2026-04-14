@@ -92,6 +92,12 @@ purpose. They should be reviewed one by one before being added:
   Installs the remote server dependencies used by the current training flow:
   `ffmpeg`, `libsndfile1`, `rsync`, `rclone`, `git`, `make`, plus the Python
   packages listed in `training/requirements-server.txt`.
+- `make remote-bootstrap-benchmarks`
+  Prepares a remote Ubuntu/Debian box for both benchmark paths:
+  installs the server Python dependencies, fetches the official SyncNet
+  checkpoint, uploads the MediaPipe `face_landmarker_v2_with_blendshapes.task`
+  asset to `models/face_processing/`, and prewarms the SFD detector used by the
+  official benchmark path.
 - `make smoke-lazy`
   Runs the lazy-dataset smoke workflow in
   `training/workflows/train/run_lazy_smoke_remote_20260325.sh`.

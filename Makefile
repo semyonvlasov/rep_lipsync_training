@@ -132,7 +132,7 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip bench-tilt-aware-x96 publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-bootstrap-benchmarks remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-fetch-face-processing-model remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip bench-tilt-aware-x96 publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -140,6 +140,7 @@ help:
 	@echo "  make bootstrap-process-lazy # install local raw->lazy processing deps on Debian/Ubuntu"
 	@echo "  make remote-bootstrap-process-lazy # prepare a remote Linux box for raw->lazy processing over SSH"
 	@echo "  make remote-bootstrap-process-docker # prepare a remote Linux box for disposable Docker CPU processing over SSH"
+	@echo "  make remote-bootstrap-benchmarks # prepare a remote Linux box for official + tilt benchmarks over SSH"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
 	@echo "  make remote-sync-code # clone/pull the latest repo on a remote box and sync the official SyncNet checkpoint"
 	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box and verify torch/CUDA compatibility"
@@ -184,7 +185,7 @@ help:
 	@echo "  OFFICIAL_SYNCNET_CKPT=/abs/path/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_URL=https://drive.google.com/open?id=..."
 	@echo "  OFFICIAL_SYNCNET_SKIP_UPLOAD=1"
-	@echo "  DATASET_FOLDER_ID=1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52"
+	@echo "  DATASET_FOLDER_ID=1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52 # default tilt-aware processed dataset"
 	@echo "  DATASET_MANIFEST_PATH=output/faceclip_merge/merge_manifest.jsonl"
 	@echo "  DATASET_INCLUDE_TIERS=\"confident medium\""
 	@echo "  DATASET_RELOAD=1  # ignore merge manifest and revisit all archives"
@@ -221,6 +222,7 @@ help:
 	@echo "  make remote-rclone-config REMOTE=root@ssh9.vast.ai PORT=24380"
 	@echo "  ssh -p 24380 root@ssh9.vast.ai 'cd /root/lipsync_test/rep_lipsync_training && make bootstrap-process-lazy PYTHON=python3'"
 	@echo "  make remote-bootstrap-process-lazy REMOTE=root@ssh9.vast.ai PORT=24380 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training REMOTE_PYTHON=python3"
+	@echo "  make remote-bootstrap-benchmarks REMOTE=root@ssh9.vast.ai PORT=24380 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training REMOTE_PYTHON=python3 FACE_PROCESSING_MODEL_PATH=/Users/semenvlasov/Documents/repos/face_processing/assets/face_landmarker_v2_with_blendshapes.task"
 	@echo "  make remote-bootstrap-process-docker REMOTE=root@192.168.1.34 PORT=22 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training FACE_PROCESSING_MODEL_PATH=/Users/semenvlasov/Documents/repos/face_processing/assets/face_landmarker_v2_with_blendshapes.task"
 
 bootstrap-fetch:
@@ -363,6 +365,31 @@ remote-fetch-official-syncnet:
 	"
 	@echo "remote-fetch-official-syncnet complete: $(REMOTE):$(REMOTE_ROOT)"
 
+remote-fetch-face-processing-model:
+	@set -euo pipefail; \
+	model_src="$(FACE_PROCESSING_MODEL_PATH)"; \
+	if [ -z "$$model_src" ]; then \
+		if [ -f "$(FACE_PROCESSING_MODEL_REPO_PATH)" ]; then \
+			model_src="$(FACE_PROCESSING_MODEL_REPO_PATH)"; \
+		elif [ -f "$(FACE_PROCESSING_MODEL_FALLBACK_PATH)" ]; then \
+			model_src="$(FACE_PROCESSING_MODEL_FALLBACK_PATH)"; \
+		else \
+			echo "remote-fetch-face-processing-model: missing face_processing model; set FACE_PROCESSING_MODEL_PATH=/abs/path/face_landmarker_v2_with_blendshapes.task"; \
+			exit 1; \
+		fi; \
+	fi; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		mkdir -p '$(dir $(REMOTE_FACE_PROCESSING_MODEL_PATH))'; \
+	"; \
+	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$(PORT)" \
+		"$$model_src" "$(REMOTE):$(REMOTE_FACE_PROCESSING_MODEL_PATH)"; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		test -f '$(REMOTE_FACE_PROCESSING_MODEL_PATH)'; \
+	"; \
+	echo "remote-fetch-face-processing-model complete: $(REMOTE):$(REMOTE_FACE_PROCESSING_MODEL_PATH)"
+
 remote-observe-system:
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
 		set -euo pipefail; \
@@ -393,9 +420,13 @@ remote-observe-system:
 remote-bootstrap: remote-sync-code remote-server-setup remote-rclone-config remote-fetch-official-syncnet remote-observe-system
 	@echo "remote-bootstrap complete: $(REMOTE):$(REMOTE_ROOT)"
 
-remote-bootstrap-process-lazy: remote-sync-code remote-server-setup remote-rclone-config
+remote-bootstrap-process-lazy: remote-sync-code remote-server-setup remote-rclone-config remote-fetch-face-processing-model
 	-@$(MAKE) remote-observe-system REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" SYSTEM_WATCH_INTERVAL="$(SYSTEM_WATCH_INTERVAL)"
 	@echo "remote-bootstrap-process-lazy complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-bootstrap-benchmarks: remote-sync-code remote-server-setup remote-fetch-official-syncnet remote-fetch-face-processing-model
+	-@$(MAKE) remote-prewarm-sfd REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)"
+	@echo "remote-bootstrap-benchmarks complete: $(REMOTE):$(REMOTE_ROOT)"
 
 remote-docker-host-setup:
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
