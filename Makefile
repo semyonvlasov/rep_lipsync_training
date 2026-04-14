@@ -107,6 +107,7 @@ BENCH_CHECKPOINT ?=
 BENCH_OUTFILE ?=
 BENCH_DEVICE ?= auto
 BENCH_DETECTOR_DEVICE ?= auto
+BENCH_LANDMARKER_DEVICE ?= auto
 BENCH_BATCH_SIZE ?= 32
 BENCH_FACE_DET_BATCH_SIZE ?= 4
 BENCH_PADS ?= 0 10 0 0
@@ -114,6 +115,8 @@ BENCH_RESIZE_FACTOR ?= 1
 BENCH_STATIC ?= 0
 BENCH_NOSMOOTH ?= 0
 BENCH_S3FD_PATH ?=
+BENCH_FACE_LANDMARKER_PATH ?=
+BENCH_KEEP_INTERMEDIATES ?= 0
 PUBLISH_CHECKPOINT ?=
 PUBLISH_INFER_ONLY_OUT ?=
 PUBLISH_RUN_NAME ?=
@@ -129,7 +132,7 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip bench-tilt-aware-x96 publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -162,6 +165,7 @@ help:
 	@echo "  make observe-system  # start a background CPU/RAM/GPU/VRAM/network observer"
 	@echo "  make watch-syncnet-generator # wait for SyncNet, benchmark all epochs vs official, then launch generator"
 	@echo "  make bench-wav2lip   # run the official Wav2Lip benchmark path (SFD + 96x96 generator)"
+	@echo "  make bench-tilt-aware-x96 # run the tilt-aware x96 benchmark path (MediaPipe stabilized pad-to-square faceclip + inverse paste-back)"
 	@echo "  make publish-checkpoint-benchmark # upload a checkpoint to Drive and benchmark it on-server"
 	@echo "  make upload-training-artifacts # upload a finished run to Drive and append the git log"
 	@echo ""
@@ -201,6 +205,7 @@ help:
 	@echo "  BENCH_FACE=/abs/path/face.mp4"
 	@echo "  BENCH_AUDIO=/abs/path/audio.mp3"
 	@echo "  BENCH_CHECKPOINT=/abs/path/Wav2Lip-SD-GAN.pt"
+	@echo "  BENCH_FACE_LANDMARKER_PATH=/abs/path/face_landmarker_v2_with_blendshapes.task"
 	@echo "  PUBLISH_CHECKPOINT=output/<run>/generator/generator_epoch000.pth"
 	@echo "  PUBLISH_FACE_LIST=\"/abs/face1.mp4 /abs/face2.mp4\""
 	@echo "  PUBLISH_AUDIO=/abs/path/short_4s.mp3"
@@ -753,6 +758,32 @@ bench-wav2lip:
 		$(if $(BENCH_S3FD_PATH),--s3fd_path "$(BENCH_S3FD_PATH)",) \
 		$(if $(filter 1 true yes,$(BENCH_STATIC)),--static,) \
 		$(if $(filter 1 true yes,$(BENCH_NOSMOOTH)),--nosmooth,)
+
+bench-tilt-aware-x96:
+	@if [ -z "$(BENCH_FACE)" ]; then \
+		echo "BENCH_FACE is required, e.g. /abs/path/portrait_avatar.mp4"; \
+		exit 1; \
+	fi
+	@if [ -z "$(BENCH_AUDIO)" ]; then \
+		echo "BENCH_AUDIO is required, e.g. /abs/path/short_4s.mp3"; \
+		exit 1; \
+	fi
+	@if [ -z "$(BENCH_CHECKPOINT)" ]; then \
+		echo "BENCH_CHECKPOINT is required, e.g. /abs/path/Wav2Lip-SD-GAN.pt"; \
+		exit 1; \
+	fi
+	cd $(REPO_ROOT) && $(PYTHON) training/scripts/run_tilt_aware_x96_benchmark.py \
+		--face "$(BENCH_FACE)" \
+		--audio "$(BENCH_AUDIO)" \
+		--checkpoint "$(BENCH_CHECKPOINT)" \
+		--device "$(BENCH_DEVICE)" \
+		--landmarker_device "$(BENCH_LANDMARKER_DEVICE)" \
+		--batch_size $(BENCH_BATCH_SIZE) \
+		--resize_factor $(BENCH_RESIZE_FACTOR) \
+		$(if $(BENCH_OUTFILE),--outfile "$(BENCH_OUTFILE)",) \
+		$(if $(BENCH_FACE_LANDMARKER_PATH),--face_landmarker_path "$(BENCH_FACE_LANDMARKER_PATH)",) \
+		$(if $(filter 1 true yes,$(BENCH_STATIC)),--static,) \
+		$(if $(filter 1 true yes,$(BENCH_KEEP_INTERMEDIATES)),--keep_intermediates,)
 
 publish-checkpoint-benchmark:
 	@if [ -z "$(PUBLISH_CHECKPOINT)" ]; then \

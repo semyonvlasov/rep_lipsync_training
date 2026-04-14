@@ -30,6 +30,9 @@ checkpoints, archives, and output artifacts are excluded from git.
   Official Wav2Lip-style benchmark runner:
   `SFD -> 96x96 Wav2Lip -> paste-back -> mux audio`.
   Checkpoints are external and are not stored in git.
+- `training/scripts/run_tilt_aware_x96_benchmark.py`
+  Tilt-aware x96 benchmark runner:
+  `MediaPipe landmarks + stabilized pad-to-square faceclip -> resize to 96x96 Wav2Lip-like model -> resize back -> inverse paste-back -> mux audio`.
 - `models/official_syncnet`
   External reference SyncNet code and SFD face detector code. Checkpoints are
   expected locally under `models/official_syncnet/checkpoints/` but are not
@@ -54,6 +57,7 @@ checkpoints, archives, and output artifacts are excluded from git.
 - generator training with watchdog
 - generator teacher comparison workflow
 - official `Wav2Lip` benchmark inference path for report baselines
+- tilt-aware `x96` benchmark inference path for roll-aware crop / paste-back comparisons
 - local processed-faceclip export pipeline
 
 ## Intentionally excluded for now
@@ -80,6 +84,7 @@ purpose. They should be reviewed one by one before being added:
    `make train-syncnet`
    `make train-generator`
    `make bench-wav2lip`
+   `make bench-tilt-aware-x96`
 
 ## Make targets
 
@@ -120,6 +125,16 @@ purpose. They should be reviewed one by one before being added:
   `BENCH_FACE=...`
   `BENCH_AUDIO=...`
   `BENCH_CHECKPOINT=...`
+- `make bench-tilt-aware-x96`
+  Runs the tilt-aware x96 benchmark path with:
+  `MediaPipe face landmarks -> stabilized pad-to-square native faceclip -> Wav2Lip-like x96 -> inverse paste-back`.
+  Required overrides:
+  `BENCH_FACE=...`
+  `BENCH_AUDIO=...`
+  `BENCH_CHECKPOINT=...`
+  Useful optional overrides:
+  `BENCH_FACE_LANDMARKER_PATH=...`
+  `BENCH_LANDMARKER_DEVICE=cpu|gpu|auto`
 - `make publish-checkpoint-benchmark`
   Remote-friendly checkpoint publish path:
   saves a slim `infer_only` checkpoint when needed, uploads checkpoint artifacts
@@ -150,6 +165,8 @@ Useful overrides:
 - `BENCH_FACE=...`
 - `BENCH_AUDIO=...`
 - `BENCH_CHECKPOINT=...`
+- `BENCH_FACE_LANDMARKER_PATH=...`
+- `BENCH_LANDMARKER_DEVICE=auto|cpu|gpu`
 - `PUBLISH_CHECKPOINT=...`
 - `PUBLISH_FACE_LIST="... ..."`
 - `PUBLISH_AUDIO=...`
