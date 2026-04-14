@@ -282,11 +282,11 @@ def evaluate_syncnet_model(model, model_type, loader, device, max_batches=None, 
     }
 
 
-def format_official_eval_comparison(metrics, baseline_metrics):
+def format_official_eval_comparison(metrics, baseline_metrics, label="official"):
     if baseline_metrics is None:
         return ""
     return (
-        f" vs_official loss_delta={metrics['loss'] - baseline_metrics['loss']:+.4f} "
+        f" vs_{label} loss_delta={metrics['loss'] - baseline_metrics['loss']:+.4f} "
         f"acc_delta={metrics['acc'] - baseline_metrics['acc']:+.4f}"
     )
 
@@ -428,11 +428,11 @@ def evaluate_syncnet_pairwise(
     }
 
 
-def format_pairwise_eval_comparison(metrics, baseline_metrics):
+def format_pairwise_eval_comparison(metrics, baseline_metrics, label="official"):
     if baseline_metrics is None:
         return ""
     return (
-        f" vs_official acc_mean_delta={metrics['pairwise_acc_mean'] - baseline_metrics['pairwise_acc_mean']:+.4f} "
+        f" vs_{label} acc_mean_delta={metrics['pairwise_acc_mean'] - baseline_metrics['pairwise_acc_mean']:+.4f} "
         f"margin_delta={metrics['margin_mean'] - baseline_metrics['margin_mean']:+.4f}"
     )
 
@@ -598,6 +598,31 @@ def save_syncnet_checkpoint(
     )
 
 
+def load_syncnet_checkpoint_model(checkpoint_path, device, default_model_type="mirror", default_syncnet_T=5):
+    ck = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if isinstance(ck, dict):
+        if "model" in ck:
+            state_dict = ck["model"]
+        elif "state_dict" in ck:
+            state_dict = ck["state_dict"]
+        else:
+            state_dict = ck
+        model_type = ck.get("syncnet_kind", default_model_type)
+        ck_cfg = ck.get("config") if isinstance(ck.get("config"), dict) else {}
+        syncnet_T = int(ck_cfg.get("syncnet", {}).get("T", default_syncnet_T))
+    else:
+        state_dict = ck
+        model_type = default_model_type
+        syncnet_T = default_syncnet_T
+
+    model = build_syncnet_model(model_type, syncnet_T, device)
+    model.load_state_dict(state_dict)
+    model.eval()
+    for p in model.parameters():
+        p.requires_grad = False
+    return model, model_type
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/default.yaml")
@@ -724,6 +749,8 @@ def main():
     best_our_eval_step = None
     official_baseline_off_eval = None
     official_baseline_our_eval = None
+    current_best_baseline_off_eval = None
+    current_best_baseline_our_eval = None
     resume_official_eval = None
     resume_our_eval = None
     if args.resume:
@@ -797,6 +824,8 @@ def main():
     legacy_best_ckpt_path = os.path.join(output_dir, "syncnet_best.pth")
     pairwise_eval_items = build_pairwise_eval_items(val_dataset, min_frames=12) if val_loader is not None else None
     official_checkpoint = resolve_repo_path(cfg["syncnet"].get("official_checkpoint"))
+    current_best_checkpoint = resolve_repo_path(cfg["syncnet"].get("current_best_checkpoint"))
+    current_best_label = str(cfg["syncnet"].get("current_best_label", "current_best")).strip() or "current_best"
     if eval_interval_steps > 0:
         log(
             f"Eval cadence: every {eval_interval_steps} global steps, "
@@ -810,6 +839,8 @@ def main():
                 f"Our eval cadence: pairwise samples={pairwise_eval_samples}, "
                 f"seed={pairwise_eval_seed}"
             )
+        if current_best_checkpoint:
+            log(f"Current-best baseline checkpoint: {current_best_checkpoint}")
     if eval_interval_steps > 0 and val_loader is None:
         log("WARNING: eval is enabled but no --val-speaker-list was provided; periodic eval/latest/best will stay disabled.")
     baseline_metrics_updated = False
@@ -885,6 +916,58 @@ def main():
                 f"{samples_part}"
             )
 
+        if current_best_checkpoint:
+            if os.path.exists(current_best_checkpoint):
+                current_best_model, current_best_model_type = load_syncnet_checkpoint_model(
+                    current_best_checkpoint,
+                    device,
+                    default_model_type="mirror",
+                    default_syncnet_T=cfg["syncnet"]["T"],
+                )
+                current_best_baseline_off_eval = evaluate_syncnet_model(
+                    current_best_model,
+                    current_best_model_type,
+                    val_loader,
+                    device,
+                    max_batches=eval_batches,
+                    use_amp=False,
+                    seed=eval_seed,
+                )
+                if pairwise_eval_samples > 0 and pairwise_eval_items:
+                    current_best_baseline_our_eval = evaluate_syncnet_pairwise(
+                        current_best_model,
+                        current_best_model_type,
+                        val_dataset,
+                        pairwise_eval_items,
+                        device,
+                        samples=pairwise_eval_samples,
+                        seed=pairwise_eval_seed,
+                        img_size=cfg["model"]["img_size"],
+                        T=cfg["syncnet"]["T"],
+                    )
+            else:
+                log(f"WARNING: current-best baseline checkpoint not found for eval: {current_best_checkpoint}")
+
+        if current_best_baseline_off_eval is not None:
+            batches_part = (
+                f" batches={current_best_baseline_off_eval['batches']}"
+                if current_best_baseline_off_eval.get("batches") is not None else ""
+            )
+            log(
+                f"{current_best_label} eval baseline: loss={current_best_baseline_off_eval['loss']:.4f} "
+                f"acc={current_best_baseline_off_eval['acc']:.3f}{batches_part}"
+            )
+        if current_best_baseline_our_eval is not None:
+            samples_part = (
+                f" samples={current_best_baseline_our_eval['samples']}"
+                if current_best_baseline_our_eval.get("samples") is not None else ""
+            )
+            log(
+                f"{current_best_label} our-eval baseline: "
+                f"{format_pairwise_eval_metrics_flexible(current_best_baseline_our_eval)}"
+                f"{samples_part}"
+            )
+
     if eval_interval_steps > 0 and val_loader is not None:
         reused_initial_off_eval = resume_official_eval is not None
         reused_initial_our_eval = resume_our_eval is not None
@@ -943,14 +1026,16 @@ def main():
             log(
                 f"{off_eval_label}: loss={initial_off_eval['loss']:.4f} "
                 f"acc={initial_off_eval['acc']:.3f}"
-                f"{format_official_eval_comparison(initial_off_eval, official_baseline_off_eval)}"
+                f"{format_official_eval_comparison(initial_off_eval, official_baseline_off_eval, 'official')}"
+                f"{format_official_eval_comparison(initial_off_eval, current_best_baseline_off_eval, current_best_label)}"
             )
             if initial_our_eval is not None:
                 our_eval_label = "Initial our-eval reused from checkpoint" if reused_initial_our_eval else "Initial our-eval"
                 log(
                     f"{our_eval_label}: "
                     f"{format_pairwise_eval_metrics_flexible(initial_our_eval)}"
-                    f"{format_pairwise_eval_comparison(initial_our_eval, official_baseline_our_eval)}"
+                    f"{format_pairwise_eval_comparison(initial_our_eval, official_baseline_our_eval, 'official')}"
+                    f"{format_pairwise_eval_comparison(initial_our_eval, current_best_baseline_our_eval, current_best_label)}"
                 )
             if initial_eval_updated_checkpoint:
                 save_syncnet_checkpoint(
@@ -1192,13 +1277,15 @@ def main():
                     log(
                         f"  Official eval step {global_step}: loss={off_eval_metrics['loss']:.4f} "
                         f"acc={off_eval_metrics['acc']:.3f}"
-                        f"{format_official_eval_comparison(off_eval_metrics, official_baseline_off_eval)}"
+                        f"{format_official_eval_comparison(off_eval_metrics, official_baseline_off_eval, 'official')}"
+                        f"{format_official_eval_comparison(off_eval_metrics, current_best_baseline_off_eval, current_best_label)}"
                     )
                     if our_eval_metrics is not None:
                         log(
                             "  Our eval step "
                             f"{global_step}: {format_pairwise_eval_metrics_flexible(our_eval_metrics)}"
-                            f"{format_pairwise_eval_comparison(our_eval_metrics, official_baseline_our_eval)}"
+                            f"{format_pairwise_eval_comparison(our_eval_metrics, official_baseline_our_eval, 'official')}"
+                            f"{format_pairwise_eval_comparison(our_eval_metrics, current_best_baseline_our_eval, current_best_label)}"
                         )
                     is_best_off = off_eval_metrics["loss"] < best_off_eval_loss
                     current_best_off_eval_loss = off_eval_metrics["loss"] if is_best_off else best_off_eval_loss

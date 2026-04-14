@@ -29,6 +29,8 @@ syncnet:
   pairwise_eval_samples: 200
   pairwise_eval_seed: 20260329
   official_checkpoint: "models/official_syncnet/checkpoints/lipsync_expert.pth"
+  current_best_checkpoint: "training/output/syncnet_current_best_20260406/syncnet_best_off_eval.pth"
+  current_best_label: "current_best"
   official_checkpoint_url: "https://drive.google.com/open?id=1_RUm6ncXDX2e_Qoyj24Yrvr6CGaBtPY4"
 
 data:
@@ -40,6 +42,8 @@ data:
   prefetch_factor: 4
   cache_size: 16
   skip_bad_samples: true
+  sync_alignment:
+    syncnet_checkpoint: "training/output/syncnet_current_best_20260406/syncnet_best_off_eval.pth"
 
 training:
   device: "cuda"

@@ -1,4 +1,6 @@
 """
+DEPRECATED: legacy local SyncNet implementation. Do not use for new training.
+
 SyncNet: Audio-visual sync discriminator.
 
 Learns a joint embedding where lip region frames and mel spectrogram
@@ -6,6 +8,9 @@ are close when in sync and far apart when out of sync.
 Trained with contrastive loss on positive (aligned) and negative (shifted) pairs.
 
 Reference: "Out of time: automated lip sync in the wild" (Chung & Zisserman, 2016)
+
+This model is kept only for backward compatibility with older checkpoints and
+ablation runs. Prefer SyncNetMirror for any new training or evaluation.
 """
 
 import torch
@@ -32,6 +37,8 @@ class ConvBlock(nn.Module):
 
 class SyncNet(nn.Module):
     """
+    DEPRECATED: do not use for new training runs.
+
     Two-stream network:
       - Visual stream: T consecutive lower-face crops → 512-d embedding
       - Audio stream: T×mel spectrogram → 512-d embedding

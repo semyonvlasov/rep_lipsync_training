@@ -21,7 +21,7 @@ audio:
 
 # --- SyncNet ---
 syncnet:
-  model_type: "local"       # "local" legacy simplified SyncNet, "mirror" official-faithful recipe
+  model_type: "local"       # DEPRECATED, do not use for new runs; prefer "mirror" official-faithful recipe
   epochs: 50
   batch_size: 64
   lr: 1.0e-4
@@ -32,6 +32,8 @@ syncnet:
   pairwise_eval_samples: 200 # compare-style ranking eval on fixed sampled pairs
   pairwise_eval_seed: 20260329
   official_checkpoint: "models/official_syncnet/checkpoints/lipsync_expert.pth"
+  current_best_checkpoint: null # optional promoted mirror checkpoint used only as an eval comparison baseline
+  current_best_label: "current_best"
   official_checkpoint_url: "https://drive.google.com/open?id=1_RUm6ncXDX2e_Qoyj24Yrvr6CGaBtPY4"
   checkpoint: null         # resume from
 

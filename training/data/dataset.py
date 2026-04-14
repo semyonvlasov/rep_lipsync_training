@@ -78,6 +78,47 @@ def _load_json(path):
         return {}
 
 
+def _format_sync_alignment_progress(meta):
+    sync_alignment = meta.get("sync_alignment") if isinstance(meta, dict) else None
+    if not isinstance(sync_alignment, dict):
+        return ""
+    status = sync_alignment.get("status")
+    if status == "aligned":
+        parts = []
+        shift = sync_alignment.get("audio_shift_mel_ticks")
+        if shift is not None:
+            parts.append(f"shift={int(shift):+d}")
+        consensus_ratio = sync_alignment.get("consensus_ratio")
+        if consensus_ratio is not None:
+            parts.append(f"consensus={float(consensus_ratio):.3f}")
+        shift_mad = sync_alignment.get("shift_mad")
+        if shift_mad is not None:
+            parts.append(f"mad={float(shift_mad):.3f}")
+        valid_frame_count = sync_alignment.get("valid_frame_count")
+        if valid_frame_count is not None:
+            parts.append(f"valid_frames={int(valid_frame_count)}")
+        return f" {' '.join(parts)}" if parts else ""
+    if status == "failed":
+        parts = ["drop"]
+        reason = sync_alignment.get("reason")
+        if reason:
+            parts.append(f"reason={reason}")
+        error = sync_alignment.get("error")
+        if error:
+            parts.append(f"detail={error}")
+        candidate_shift = sync_alignment.get("candidate_audio_shift_mel_ticks")
+        if candidate_shift is not None:
+            parts.append(f"candidate_shift={int(candidate_shift):+d}")
+        consensus_ratio = sync_alignment.get("consensus_ratio")
+        if consensus_ratio is not None:
+            parts.append(f"consensus={float(consensus_ratio):.3f}")
+        shift_mad = sync_alignment.get("shift_mad")
+        if shift_mad is not None:
+            parts.append(f"mad={float(shift_mad):.3f}")
+        return f" {' '.join(parts)}"
+    return ""
+
+
 def _atomic_save_npy(path, array):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
@@ -805,9 +846,10 @@ class LipSyncDataset(Dataset):
             flush=True,
         )
         for idx, entry in enumerate(missing, start=1):
-            self._ensure_entry_sync_alignment(entry)
+            meta = self._ensure_entry_sync_alignment(entry)
             print(
-                f"[Dataset] Sync alignment [{idx}/{len(missing)}] {entry['name']}",
+                f"[Dataset] Sync alignment [{idx}/{len(missing)}] {entry['name']}"
+                f"{_format_sync_alignment_progress(meta)}",
                 flush=True,
             )
 
@@ -884,6 +926,9 @@ class LipSyncDataset(Dataset):
                 return failed_meta
 
             extra = {
+                "candidate_audio_shift_mel_ticks": result.get("audio_shift_mel_ticks"),
+                "candidate_best_mean_loss": result.get("best_mean_loss"),
+                "candidate_zero_mean_loss": result.get("zero_mean_loss"),
                 "compute_device": result["device"],
                 "starts": result["starts"],
                 "kept_starts": result.get("kept_starts", []),
