@@ -44,6 +44,9 @@ data:
   skip_bad_samples: true
   sync_alignment:
     syncnet_checkpoint: "output/syncnet_current_best_20260406/syncnet_best_off_eval.pth"
+    outlier_trim_ratio: 0.2
+    min_consensus_ratio: 0.7
+    max_shift_mad: 1.5
 
 training:
   device: "cuda"
