@@ -278,6 +278,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--face", action="append", default=[], help="Benchmark face video/image; repeatable")
     parser.add_argument("--audio", default=None, help="Benchmark audio file shared by all faces")
     parser.add_argument(
+        "--benchmark-script",
+        default="run_official_wav2lip_benchmark.py",
+        help="Benchmark runner under training/scripts/",
+    )
+    parser.add_argument(
         "--output-dir",
         default=None,
         help="Directory for benchmark outputs and manifest (defaults under training/output)",
@@ -287,6 +292,11 @@ def parse_args() -> argparse.Namespace:
         "--detector-device",
         default="cuda",
         choices=("auto", "cpu", "mps", "cuda"),
+    )
+    parser.add_argument(
+        "--landmarker-device",
+        default="cpu",
+        choices=("auto", "cpu", "gpu"),
     )
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--face-det-batch-size", type=int, default=4)
@@ -346,7 +356,8 @@ def main() -> None:
         if not audio_path.exists():
             raise FileNotFoundError(audio_path)
 
-        benchmark_script = TRAINING_ROOT / "scripts" / "run_official_wav2lip_benchmark.py"
+        benchmark_script = TRAINING_ROOT / "scripts" / Path(args.benchmark_script).name
+        benchmark_is_tilt_aware = benchmark_script.name == "run_tilt_aware_x96_benchmark.py"
         for face_raw in args.face:
             face_path = resolve_path(face_raw)
             if not face_path.exists():
@@ -365,14 +376,21 @@ def main() -> None:
                 str(out_path),
                 "--device",
                 args.device,
-                "--detector_device",
-                args.detector_device,
                 "--batch_size",
                 str(args.batch_size),
-                "--face_det_batch_size",
-                str(args.face_det_batch_size),
             ]
-            if args.s3fd_path:
+            if benchmark_is_tilt_aware:
+                cmd.extend(["--landmarker_device", args.landmarker_device])
+            else:
+                cmd.extend(
+                    [
+                        "--detector_device",
+                        args.detector_device,
+                        "--face_det_batch_size",
+                        str(args.face_det_batch_size),
+                    ]
+                )
+            if args.s3fd_path and not benchmark_is_tilt_aware:
                 cmd.extend(["--s3fd_path", str(resolve_path(args.s3fd_path))])
 
             log(f"Benchmarking {face_path.name} -> {out_path.name}")

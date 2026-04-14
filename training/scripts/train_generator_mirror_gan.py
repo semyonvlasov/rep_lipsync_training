@@ -715,12 +715,20 @@ def resolve_training_path(raw_path: str | None) -> str | None:
 def resolve_benchmark_cfg(cfg: dict) -> dict:
     section = dict(cfg.get("benchmark") or {})
     faces = [resolve_training_path(item) for item in section.get("faces", [])]
+    script = str(section.get("script", "run_official_wav2lip_benchmark.py")).strip()
+    if not script:
+        script = "run_official_wav2lip_benchmark.py"
+    script_path = Path(script)
+    if not script_path.is_absolute():
+        script_path = Path(TRAINING_ROOT) / "scripts" / script_path.name
     return {
         "enabled": bool(section.get("enabled", False)),
+        "script": str(script_path),
         "audio": resolve_training_path(section.get("audio")),
         "faces": [item for item in faces if item],
         "device": str(section.get("device", "cuda")),
         "detector_device": str(section.get("detector_device", "cuda")),
+        "landmarker_device": str(section.get("landmarker_device", "cpu")),
         "batch_size": int(section.get("batch_size", 16)),
         "face_det_batch_size": int(section.get("face_det_batch_size", 4)),
         "s3fd_path": resolve_training_path(section.get("s3fd_path")),
@@ -784,7 +792,8 @@ def run_checkpoint_benchmark(
 
     benchmark_dir = artifact_dir / "benchmark"
     benchmark_dir.mkdir(parents=True, exist_ok=True)
-    benchmark_script = Path(TRAINING_ROOT) / "scripts" / "run_official_wav2lip_benchmark.py"
+    benchmark_script = Path(benchmark_cfg["script"])
+    benchmark_is_tilt_aware = benchmark_script.name == "run_tilt_aware_x96_benchmark.py"
     outputs = []
     for face_path in benchmark_cfg["faces"]:
         out_path = benchmark_dir / benchmark_output_name(face_path, benchmark_cfg["audio"], checkpoint_path)
@@ -801,14 +810,21 @@ def run_checkpoint_benchmark(
             str(out_path),
             "--device",
             benchmark_cfg["device"],
-            "--detector_device",
-            benchmark_cfg["detector_device"],
             "--batch_size",
             str(benchmark_cfg["batch_size"]),
-            "--face_det_batch_size",
-            str(benchmark_cfg["face_det_batch_size"]),
         ]
-        if benchmark_cfg["s3fd_path"]:
+        if benchmark_is_tilt_aware:
+            cmd.extend(["--landmarker_device", benchmark_cfg["landmarker_device"]])
+        else:
+            cmd.extend(
+                [
+                    "--detector_device",
+                    benchmark_cfg["detector_device"],
+                    "--face_det_batch_size",
+                    str(benchmark_cfg["face_det_batch_size"]),
+                ]
+            )
+        if benchmark_cfg["s3fd_path"] and not benchmark_is_tilt_aware:
             cmd.extend(["--s3fd_path", str(benchmark_cfg["s3fd_path"])])
         if benchmark_cfg["cache_root"]:
             cmd.extend(["--cache_root", str(benchmark_cfg["cache_root"])])
