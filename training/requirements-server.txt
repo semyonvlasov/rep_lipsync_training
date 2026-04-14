@@ -1,6 +1,7 @@
 gdown
 librosa
 mediapipe>=0.10.9
+numpy<2
 opencv-python-headless
 PyYAML
 scipy

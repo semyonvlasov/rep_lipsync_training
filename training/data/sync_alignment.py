@@ -389,7 +389,15 @@ def load_official_syncnet(checkpoint_path: str, device: str):
     SyncNet = _load_official_syncnet_class()
     model = SyncNet().to(device)
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    state_dict = checkpoint["state_dict"] if isinstance(checkpoint, dict) and "state_dict" in checkpoint else checkpoint
+    if isinstance(checkpoint, dict):
+        if "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+        elif "model" in checkpoint:
+            state_dict = checkpoint["model"]
+        else:
+            state_dict = checkpoint
+    else:
+        state_dict = checkpoint
     model.load_state_dict(state_dict)
     model.eval()
     for param in model.parameters():
