@@ -17,7 +17,7 @@ import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
@@ -137,12 +137,10 @@ def ensure_metadata(output_dir: str, variant: str) -> str:
     return local_path
 
 
-def iter_clips(json_path: str) -> Iterable[dict]:
+def load_metadata_items(json_path: str) -> list[dict]:
     with open(json_path) as f:
         items = json.load(f)
-    for item in items:
-        if isinstance(item, dict):
-            yield item
+    return [item for item in items if isinstance(item, dict)]
 
 
 def load_completed_ids(manifest_paths: list[str]) -> set[str]:
@@ -170,6 +168,34 @@ def load_completed_ids(manifest_paths: list[str]) -> set[str]:
                     if base.endswith(".mp4"):
                         done.add(base[:-4])
     return done
+
+
+def load_reference_clip_ids(reference_manifest: str, *, reverse: bool) -> tuple[list[str], int]:
+    path = Path(reference_manifest)
+    if not path.exists():
+        raise FileNotFoundError(f"missing reference manifest: {path}")
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    ordered_lines = reversed(lines) if reverse else lines
+    seen: set[str] = set()
+    clip_ids: list[str] = []
+    parse_failures = 0
+
+    for raw_line in ordered_lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            parse_failures += 1
+            continue
+        clip = str(obj.get("clip_id") or "").strip()
+        if not clip or clip in seen:
+            continue
+        seen.add(clip)
+        clip_ids.append(clip)
+    return clip_ids, parse_failures
 
 
 def load_blocked_video_keys(manifest_paths: list[str]) -> set[str]:
@@ -249,6 +275,29 @@ def choose_cookie_source(
 
 def clip_id(item: dict) -> str:
     return str(item.get("id") or "").replace("/", "_")
+
+
+def build_clip_sequence(
+    json_path: str,
+    *,
+    reverse: bool,
+    reference_manifest: Optional[str],
+) -> tuple[list[dict], int, int]:
+    items = load_metadata_items(json_path)
+    if not reference_manifest:
+        return (list(reversed(items)) if reverse else items), 0, 0
+
+    item_by_id = {clip_id(item): item for item in items if clip_id(item)}
+    reference_ids, parse_failures = load_reference_clip_ids(reference_manifest, reverse=reverse)
+    sequence: list[dict] = []
+    missing_ids = 0
+    for item_id in reference_ids:
+        item = item_by_id.get(item_id)
+        if item is None:
+            missing_ids += 1
+            continue
+        sequence.append(item)
+    return sequence, parse_failures, missing_ids
 
 
 def output_path_for(raw_dir: str, item: dict) -> str:
@@ -471,13 +520,38 @@ def build_argparser() -> argparse.ArgumentParser:
         default=[],
         help="JSONL manifest(s) containing completed clip ids or packaged filenames to skip",
     )
-    parser.add_argument(
-        "--start-after-clip-id",
+    start_group = parser.add_mutually_exclusive_group()
+    start_group.add_argument(
+        "--start-from-clip-id",
         default="",
         help=(
-            "Skip metadata items through this TalkVid clip id and start downloading "
-            "from the next metadata item."
+            "Start downloading inclusively from this TalkVid clip id in the selected "
+            "iteration order."
         ),
+    )
+    start_group.add_argument(
+        "--start-after-clip-id",
+        "--before-clip-id",
+        dest="start_after_clip_id",
+        default="",
+        help=(
+            "Skip items through this TalkVid clip id and start downloading from the "
+            "next item in the selected iteration order."
+        ),
+    )
+    parser.add_argument(
+        "--reference-manifest",
+        default="",
+        help=(
+            "Optional JSONL manifest whose clip order should be replayed. When set, "
+            "clip-id dedupe from --skip-manifest is disabled so clips can be "
+            "re-fetched at a higher resolution."
+        ),
+    )
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Iterate the selected source order backward.",
     )
     parser.add_argument("--delay-seconds", type=int, default=0)
     parser.add_argument("--cookies-file", default=os.environ.get("YTDLP_COOKIES_FILE"))
@@ -534,10 +608,18 @@ def main() -> int:
 
     metadata_path = ensure_metadata(metadata_dir, args.variant)
     manifest_path = os.path.join(output_root, args.manifest_name)
-    completed_ids = load_completed_ids(args.skip_manifest)
+    reference_manifest = str(args.reference_manifest or "").strip()
+    completed_ids = set() if reference_manifest else load_completed_ids(args.skip_manifest)
     blocked_video_keys = load_blocked_video_keys(args.skip_manifest)
     cookie_sources = build_cookie_sources(args)
     rotate_every_successes = max(0, args.cookies_rotate_every_successes)
+    clip_sequence, reference_manifest_parse_failures, reference_manifest_missing_ids = (
+        build_clip_sequence(
+            metadata_path,
+            reverse=args.reverse,
+            reference_manifest=reference_manifest or None,
+        )
+    )
 
     start_raw_bytes = get_dir_size_bytes(raw_dir)
     target_added_bytes = int(args.target_additional_gb * (1024 ** 3))
@@ -553,13 +635,27 @@ def main() -> int:
     log(f"[TalkVid] min_free_gb={args.min_free_gb:.2f}")
     log(f"[TalkVid] completed_ids={len(completed_ids)}")
     log(f"[TalkVid] blocked_video_keys={len(blocked_video_keys)}")
+    log(f"[TalkVid] reverse={args.reverse}")
+    log(f"[TalkVid] source_items={len(clip_sequence)}")
     log(f"[TalkVid] jobs={jobs}")
     log(f"[TalkVid] request_min_interval_seconds={args.request_min_interval_seconds:.3f}")
     log(f"[TalkVid] rate_limit_cooldown_seconds={args.rate_limit_cooldown_seconds}")
     log(f"[TalkVid] max_rate_limit_cooldowns={args.max_rate_limit_cooldowns}")
     log(f"[TalkVid] cookies_rotate_every_successes={rotate_every_successes}")
+    if args.start_from_clip_id:
+        log(f"[TalkVid] start_from_clip_id={args.start_from_clip_id}")
     if args.start_after_clip_id:
         log(f"[TalkVid] start_after_clip_id={args.start_after_clip_id}")
+    if reference_manifest:
+        log(f"[TalkVid] reference_manifest={reference_manifest}")
+        log(
+            "[TalkVid] reference-manifest mode: ignoring completed clip ids from "
+            "--skip-manifest so clips can be re-fetched"
+        )
+        log(
+            f"[TalkVid] reference_manifest_parse_failures={reference_manifest_parse_failures}"
+        )
+        log(f"[TalkVid] reference_manifest_missing_ids={reference_manifest_missing_ids}")
     if args.cookies_from_browser:
         log(f"[TalkVid] cookies_from_browser={args.cookies_from_browser}")
     if args.cookies_file:
@@ -589,8 +685,9 @@ def main() -> int:
     bot_check_notice_sent = False
     rate_limit_notice_sent = False
     current_cookie_label: Optional[str] = None
-    waiting_for_start_after = bool(args.start_after_clip_id)
-    start_after_found = not waiting_for_start_after
+    start_anchor_clip_id = str(args.start_from_clip_id or args.start_after_clip_id or "").strip()
+    waiting_for_start_anchor = bool(start_anchor_clip_id)
+    start_anchor_found = not waiting_for_start_anchor
     skipped_before_start = 0
 
     def log_result(
@@ -664,7 +761,7 @@ def main() -> int:
             log(f"[TalkVid] blocking source video_key={video_key} after {reason}")
 
     try:
-        clip_iter = iter_clips(metadata_path)
+        clip_iter = iter(clip_sequence)
         pending: dict = {}
         exhausted = False
         with ThreadPoolExecutor(max_workers=jobs) as executor:
@@ -701,17 +798,24 @@ def main() -> int:
                         break
 
                     item_id = clip_id(item)
-                    if waiting_for_start_after:
+                    if waiting_for_start_anchor:
                         skipped_before_start += 1
-                        if item_id == args.start_after_clip_id:
-                            waiting_for_start_after = False
-                            start_after_found = True
+                        if item_id != start_anchor_clip_id:
+                            continue
+                        waiting_for_start_anchor = False
+                        start_anchor_found = True
+                        if args.start_after_clip_id:
                             log(
                                 f"[TalkVid] matched start_after_clip_id={args.start_after_clip_id}; "
-                                f"starting from the next metadata item "
+                                f"starting from the next item "
                                 f"(skipped_prefix_items={skipped_before_start})"
                             )
-                        continue
+                            continue
+                        log(
+                            f"[TalkVid] matched start_from_clip_id={args.start_from_clip_id}; "
+                            f"starting inclusively "
+                            f"(skipped_prefix_items={max(0, skipped_before_start - 1)})"
+                        )
 
                     video_key = video_key_for_item(item)
                     if not clip_allowed(item, args):
@@ -804,8 +908,8 @@ def main() -> int:
         interrupted = True
         log("[TalkVid] Interrupted externally; keeping already downloaded files for resume")
 
-    if not start_after_found:
-        log(f"[TalkVid] ERROR: start_after_clip_id not found: {args.start_after_clip_id}")
+    if not start_anchor_found:
+        log(f"[TalkVid] ERROR: start clip not found in source order: {start_anchor_clip_id}")
         return 2
 
     final_raw_bytes = get_dir_size_bytes(raw_dir)

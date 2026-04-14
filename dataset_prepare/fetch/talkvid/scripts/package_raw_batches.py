@@ -65,18 +65,33 @@ def next_batch_index(archives_dir: Path) -> int:
     return next_idx
 
 
+def format_batch_name(batch_index: int) -> str:
+    if batch_index >= 0:
+        return f"{batch_index:04d}"
+    return f"minus{abs(batch_index):04d}"
+
+
 def parse_explicit_batch_index(batch_name: str) -> int:
     value = str(batch_name).strip()
     if value.startswith("batch_"):
         value = value[len("batch_") :]
+    if value.startswith("minus"):
+        tail = value[len("minus") :]
+        if not tail.isdigit():
+            raise ValueError(
+                f"batch_name must look like 0039, batch_0039, minus0001, or batch_minus0001; got: {batch_name!r}"
+            )
+        return -int(tail)
     if not value.isdigit():
-        raise ValueError(f"batch_name must look like 0039 or batch_0039, got: {batch_name!r}")
+        raise ValueError(
+            f"batch_name must look like 0039, batch_0039, minus0001, or batch_minus0001; got: {batch_name!r}"
+        )
     return int(value)
 
 
-def flush_batch(archives_dir: Path, prefix: str, batch_index: int, files: list[Path]) -> Path:
+def flush_batch(archives_dir: Path, prefix: str, batch_name: str, files: list[Path]) -> Path:
     archives_dir.mkdir(parents=True, exist_ok=True)
-    tar_path = archives_dir / f"{prefix}_batch_{batch_index:04d}.tar"
+    tar_path = archives_dir / f"{prefix}_batch_{batch_name}.tar"
     with tarfile.open(tar_path, "w") as tar:
         for path in files:
             tar.add(path, arcname=path.name)
@@ -153,6 +168,7 @@ def main() -> int:
         if explicit_batch_name
         else next_batch_index(archives_dir)
     )
+    batch_name = format_batch_name(batch_index)
     created = 0
 
     for path in files:
@@ -160,12 +176,12 @@ def main() -> int:
         would_exceed_count = bool(args.max_clips > 0 and batch_files and len(batch_files) >= args.max_clips)
         would_exceed_size = bool(max_bytes > 0 and batch_files and (batch_bytes + file_size > max_bytes))
         if would_exceed_count or would_exceed_size:
-            tar_path = flush_batch(archives_dir, args.prefix, batch_index, batch_files)
+            tar_path = flush_batch(archives_dir, args.prefix, batch_name, batch_files)
             append_manifest(
                 archives_dir,
                 {
                     "batch_index": batch_index,
-                    "batch_name": f"{batch_index:04d}",
+                    "batch_name": batch_name,
                     "tar_path": str(tar_path),
                     "raw_dir": str(raw_dir),
                     "batch_root": args.batch_root,
@@ -178,6 +194,7 @@ def main() -> int:
             log(f"[Pack] created {tar_path.name}: clips={len(batch_files)} size_gb={batch_bytes / (1024 ** 3):.3f}")
             created += 1
             batch_index += 1
+            batch_name = format_batch_name(batch_index)
             batch_files = []
             batch_bytes = 0
             if args.max_batches > 0 and created >= args.max_batches:
@@ -195,12 +212,12 @@ def main() -> int:
                 f"size_gb={batch_bytes / (1024 ** 3):.3f}"
             )
             return 0
-        tar_path = flush_batch(archives_dir, args.prefix, batch_index, batch_files)
+        tar_path = flush_batch(archives_dir, args.prefix, batch_name, batch_files)
         append_manifest(
             archives_dir,
             {
                 "batch_index": batch_index,
-                "batch_name": f"{batch_index:04d}",
+                "batch_name": batch_name,
                 "tar_path": str(tar_path),
                 "raw_dir": str(raw_dir),
                 "batch_root": args.batch_root,

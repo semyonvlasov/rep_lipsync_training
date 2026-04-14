@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Fetch raw TalkVid clips, package raw tar batches, and upload them to Drive.
 
-Supports CLI-only batch numbering overrides via `--resume-batch` and
-`--start-from-batch`, plus metadata-position override via
-`--start-after-clip-id`.
+Supports forward and reverse numbering via `--resume-batch` /
+`--start-from-batch`, plus metadata/reference-manifest position overrides via
+`--start-from-clip-id` / `--start-after-clip-id`.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -37,16 +38,62 @@ from dataset_prepare.common.config import (
 EXPECTED_STAGE = "fetch_talkvid_raw_to_gdrive"
 
 
+def format_batch_name(batch_idx: int) -> str:
+    if batch_idx >= 0:
+        return f"{batch_idx:04d}"
+    return f"minus{abs(batch_idx):04d}"
+
+
+def parse_batch_index(raw_value: str) -> int:
+    value = str(raw_value).strip()
+    if not value:
+        raise ValueError("batch id is empty")
+    if value.startswith("batch_"):
+        value = value[len("batch_") :]
+    if value.startswith("minus"):
+        tail = value[len("minus") :]
+        if not tail.isdigit():
+            raise ValueError(f"batch id must look like minus0001, got: {raw_value!r}")
+        return -int(tail, 10)
+    if value.isdigit():
+        return int(value, 10)
+    raise ValueError(
+        f"batch id must look like 0034, batch_0034, minus0001, or batch_minus0001; got: {raw_value!r}"
+    )
+
+
 def parse_batch_name(raw_value: str) -> str:
     try:
-        batch_idx = int(raw_value, 10)
+        return format_batch_name(parse_batch_index(raw_value))
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            f"batch id must be an integer like 0034, got: {raw_value!r}"
-        ) from exc
-    if batch_idx < 0:
-        raise argparse.ArgumentTypeError("batch id must be non-negative")
-    return f"{batch_idx:04d}"
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def read_reference_manifest_start_clip(
+    manifest_path: Path, batch_name: str, *, reverse: bool
+) -> str:
+    if not manifest_path.exists():
+        raise RuntimeError(f"missing reference manifest: {manifest_path}")
+
+    needle = f"/batch_{batch_name}/raw/"
+    lines = manifest_path.read_text(encoding="utf-8").splitlines()
+    ordered_lines = reversed(lines) if reverse else lines
+    for raw_line in ordered_lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        output_path = str(obj.get("output_path") or "").replace("\\", "/")
+        clip_id = str(obj.get("clip_id") or "").strip()
+        if clip_id and needle in output_path:
+            return clip_id
+
+    raise RuntimeError(
+        f"failed to resolve clip for batch_{batch_name} from reference manifest {manifest_path}"
+    )
 
 
 def parse_args(default_config: Path) -> argparse.Namespace:
@@ -63,12 +110,40 @@ def parse_args(default_config: Path) -> argparse.Namespace:
         type=parse_batch_name,
         help="Start a new numbering sequence from a specific batch id like 0035.",
     )
-    parser.add_argument(
-        "--start-after-clip-id",
+    start_group = parser.add_mutually_exclusive_group()
+    start_group.add_argument(
+        "--start-from-clip-id",
         default="",
         help=(
-            "Skip metadata items through this TalkVid clip id and start downloading "
-            "from the next metadata item."
+            "Start downloading inclusively from this TalkVid clip id in the selected "
+            "iteration order."
+        ),
+    )
+    start_group.add_argument(
+        "--start-after-clip-id",
+        "--before-clip-id",
+        dest="start_after_clip_id",
+        default="",
+        help=(
+            "Skip items through this TalkVid clip id and start downloading from the "
+            "next item in the selected iteration order."
+        ),
+    )
+    parser.add_argument(
+        "--reference-manifest",
+        default="",
+        help=(
+            "Optional JSONL manifest whose clip order should drive fetch selection. "
+            "Useful for 1080p refetches of previously downloaded 720p batches."
+        ),
+    )
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        help=(
+            "Iterate the source order backward. When used with --reference-manifest "
+            "and --start-from-batch/--resume-batch, the start clip is auto-resolved "
+            "from the reference manifest."
         ),
     )
     return parser.parse_args()
@@ -78,17 +153,21 @@ def read_next_batch_index(counter_file: Path) -> int:
     if not counter_file.exists():
         return 0
     text = counter_file.read_text(encoding="utf-8").strip()
-    return int(text) if text.isdigit() else 0
+    try:
+        return int(text, 10)
+    except ValueError:
+        return 0
 
 
 def write_next_batch_index(counter_file: Path, next_idx: int) -> None:
     counter_file.write_text(f"{next_idx}\n", encoding="utf-8")
 
 
-def next_batch_name(counter_file: Path) -> str:
+def next_batch_name(counter_file: Path, *, reverse: bool) -> str:
     next_idx = read_next_batch_index(counter_file)
-    write_next_batch_index(counter_file, next_idx + 1)
-    return f"{next_idx:04d}"
+    step = -1 if reverse else 1
+    write_next_batch_index(counter_file, next_idx + step)
+    return format_batch_name(next_idx)
 
 
 def choose_batch_root(
@@ -97,19 +176,24 @@ def choose_batch_root(
     batch_counter_file: Path,
     resume_batch: str | None,
     start_from_batch: str | None,
+    reverse: bool,
     first_iteration: bool,
     log_fp: object | None,
 ) -> tuple[str, Path]:
+    step = -1 if reverse else 1
     if first_iteration and resume_batch is not None:
         batch_root = batch_runs_dir / f"batch_{resume_batch}"
         if not batch_root.exists():
             raise RuntimeError(
                 f"--resume-batch={resume_batch} requested but {batch_root} does not exist"
             )
-        resume_next_idx = int(resume_batch) + 1
-        current_next_idx = read_next_batch_index(batch_counter_file)
-        if resume_next_idx > current_next_idx:
+        resume_next_idx = parse_batch_index(resume_batch) + step
+        if reverse:
             write_next_batch_index(batch_counter_file, resume_next_idx)
+        else:
+            current_next_idx = read_next_batch_index(batch_counter_file)
+            if resume_next_idx > current_next_idx:
+                write_next_batch_index(batch_counter_file, resume_next_idx)
         log(f"[cycle] resuming existing batch=batch_{resume_batch}", log_fp=log_fp)
         return resume_batch, batch_root
 
@@ -120,11 +204,11 @@ def choose_batch_root(
                 f"--start-from-batch={start_from_batch} conflicts with existing {batch_root}; "
                 f"use --resume-batch {start_from_batch} instead"
             )
-        write_next_batch_index(batch_counter_file, int(start_from_batch) + 1)
+        write_next_batch_index(batch_counter_file, parse_batch_index(start_from_batch) + step)
         log(f"[cycle] starting new batch numbering at batch_{start_from_batch}", log_fp=log_fp)
         return start_from_batch, batch_root
 
-    batch_name = next_batch_name(batch_counter_file)
+    batch_name = next_batch_name(batch_counter_file, reverse=reverse)
     batch_root = batch_runs_dir / f"batch_{batch_name}"
     return batch_name, batch_root
 
@@ -250,6 +334,9 @@ def launch_fetch(
     cookies_from_browser: str,
     cookies_rotate_every_successes: int,
     download_jobs: int,
+    reference_manifest: Path | None,
+    reverse: bool,
+    start_from_clip_id: str,
     start_after_clip_id: str,
     log_fp: object | None,
 ) -> subprocess.Popen[bytes]:
@@ -299,8 +386,14 @@ def launch_fetch(
     ]
     if cookies_from_browser:
         cmd.extend(["--cookies-from-browser", cookies_from_browser])
-    else:
+    if cookies_file:
         cmd.extend(["--cookies-file", cookies_file])
+    if reference_manifest is not None:
+        cmd.extend(["--reference-manifest", str(reference_manifest)])
+    if reverse:
+        cmd.append("--reverse")
+    if start_from_clip_id:
+        cmd.extend(["--start-from-clip-id", start_from_clip_id])
     if start_after_clip_id:
         cmd.extend(["--start-after-clip-id", start_after_clip_id])
     cmd.extend(["--jobs", str(download_jobs)])
@@ -333,6 +426,11 @@ def main() -> int:
         batch_runs_dir = data_root / "batches"
         global_manifest = data_root / "download_manifest.jsonl"
         batch_counter_file = data_root / "next_fetch_batch_index.txt"
+        reference_manifest = (
+            resolve_repo_path(paths.repo_root, args.reference_manifest)
+            if args.reference_manifest
+            else None
+        )
 
         batch_runs_dir.mkdir(parents=True, exist_ok=True)
         archives_dir.mkdir(parents=True, exist_ok=True)
@@ -380,11 +478,20 @@ def main() -> int:
                 log(f"[cycle] cli_resume_batch={args.resume_batch}", log_fp=log_fp)
             if args.start_from_batch is not None:
                 log(f"[cycle] cli_start_from_batch={args.start_from_batch}", log_fp=log_fp)
+            if args.start_from_clip_id:
+                log(
+                    f"[cycle] cli_start_from_clip_id={args.start_from_clip_id}",
+                    log_fp=log_fp,
+                )
             if args.start_after_clip_id:
                 log(
                     f"[cycle] cli_start_after_clip_id={args.start_after_clip_id}",
                     log_fp=log_fp,
                 )
+            if args.reverse:
+                log("[cycle] cli_reverse=true", log_fp=log_fp)
+            if reference_manifest is not None:
+                log(f"[cycle] cli_reference_manifest={reference_manifest}", log_fp=log_fp)
             log(
                 "[cycle] "
                 f"remote={gdrive_remote} batch_gb={batch_gb} "
@@ -400,6 +507,25 @@ def main() -> int:
             if cookies_file:
                 log(f"[cycle] cookies_file={cookies_file}", log_fp=log_fp)
 
+            resolved_start_from_clip_id = args.start_from_clip_id
+            anchor_batch_name = args.resume_batch or args.start_from_batch
+            if (
+                not resolved_start_from_clip_id
+                and not args.start_after_clip_id
+                and reference_manifest is not None
+                and anchor_batch_name is not None
+            ):
+                resolved_start_from_clip_id = read_reference_manifest_start_clip(
+                    reference_manifest,
+                    anchor_batch_name,
+                    reverse=args.reverse,
+                )
+                log(
+                    f"[cycle] resolved_start_from_clip_id={resolved_start_from_clip_id} "
+                    f"from batch_{anchor_batch_name}",
+                    log_fp=log_fp,
+                )
+
             first_batch_selection: tuple[str, Path] | None = None
             if args.resume_batch is not None or args.start_from_batch is not None:
                 first_batch_selection = choose_batch_root(
@@ -407,6 +533,7 @@ def main() -> int:
                     batch_counter_file=batch_counter_file,
                     resume_batch=args.resume_batch,
                     start_from_batch=args.start_from_batch,
+                    reverse=args.reverse,
                     first_iteration=True,
                     log_fp=log_fp,
                 )
@@ -437,6 +564,7 @@ def main() -> int:
                         batch_counter_file=batch_counter_file,
                         resume_batch=args.resume_batch,
                         start_from_batch=args.start_from_batch,
+                        reverse=args.reverse,
                         first_iteration=first_iteration,
                         log_fp=log_fp,
                     )
@@ -468,6 +596,9 @@ def main() -> int:
                     cookies_from_browser=cookies_from_browser,
                     cookies_rotate_every_successes=cookies_rotate_every_successes,
                     download_jobs=download_jobs,
+                    reference_manifest=reference_manifest,
+                    reverse=args.reverse,
+                    start_from_clip_id=resolved_start_from_clip_id,
                     start_after_clip_id=args.start_after_clip_id,
                     log_fp=log_fp,
                 )
