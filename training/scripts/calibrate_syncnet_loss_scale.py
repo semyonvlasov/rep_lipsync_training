@@ -28,6 +28,7 @@ import yaml
 
 TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TRAINING_ROOT)
+from config_loader import load_config
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
@@ -169,7 +170,7 @@ def scenario_label(shift: int) -> str:
 
 def main():
     args = parse_args()
-    cfg = yaml.safe_load(open(args.config))
+    cfg = load_config(args.config)
     allowlist = load_allowlist(args.speaker_list)
     shift_frames = sorted({int(x.strip()) for x in args.shift_frames.split(",") if x.strip()})
     max_shift = max(shift_frames)

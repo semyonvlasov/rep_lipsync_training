@@ -15,6 +15,8 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("PyYAML is required for upload_syncnet_results_to_gdrive.py") from exc
 
+from config_loader import load_config
+
 
 def timestamp() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -240,7 +242,7 @@ def main() -> int:
     if args.val_snapshot:
         val_snapshot = Path(args.val_snapshot).resolve()
 
-    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config = load_config(config_path)
     log_summary = parse_launcher_log(launcher_log)
     split_summary_json = None
     if split_summary and split_summary.exists():

@@ -28,6 +28,7 @@ if str(TRAINING_ROOT / "models") not in sys.path:
     sys.path.insert(0, str(TRAINING_ROOT / "models"))
 
 from data import LipSyncDataset
+from config_loader import load_config
 from syncnet import SyncNet
 from syncnet_mirror import SyncNetMirror
 from scripts.dataset_roots import get_dataset_roots
@@ -570,8 +571,7 @@ def evaluate_official(
 
 def main() -> None:
     args = parse_args()
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     eval_batches = int(args.eval_batches or cfg["syncnet"].get("eval_batches", 1400))
     eval_seed = int(args.eval_seed or cfg["syncnet"].get("eval_seed", 20260329))

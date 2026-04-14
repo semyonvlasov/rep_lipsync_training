@@ -18,6 +18,7 @@ import yaml
 TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, TRAINING_ROOT)
 from data import LipSyncDataset
+from config_loader import load_config
 from scripts.dataset_roots import get_dataset_roots
 
 
@@ -125,8 +126,7 @@ def main():
     parser.add_argument("--max-items", type=int, default=0, help="Limit number of lazy entries for testing")
     args = parser.parse_args()
 
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     def log(msg):
         import datetime

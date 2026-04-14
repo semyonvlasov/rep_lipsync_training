@@ -43,6 +43,7 @@ REPO_ROOT = os.path.dirname(TRAINING_ROOT)
 sys.path.insert(0, TRAINING_ROOT)
 
 from data import LipSyncDataset
+from config_loader import load_config
 from scripts.dataset_roots import get_dataset_roots
 
 
@@ -1826,8 +1827,7 @@ def main():
     parser.add_argument("--val-speaker-list", default=None, help="Optional newline-separated validation snapshot")
     args = parser.parse_args()
 
-    with open(args.config, encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     if int(cfg["model"]["img_size"]) != 96:
         raise SystemExit("generator_mirror_gan only supports model.img_size=96")

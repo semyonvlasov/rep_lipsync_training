@@ -116,23 +116,6 @@ data:
   min_samples_per_speaker: 0
   materialize_frames_size: 96
   lazy_cache_root: null
-  sync_alignment:
-    enabled: true
-    compute_if_missing: true
-    guard_mel_ticks: 10
-    search_mel_ticks: 10
-    samples: 0
-    sample_density_per_5s: 10.0
-    seed: 20260403
-    min_start_gap_ratio: 0.0
-    start_gap_multiple: 0
-    device: auto
-    batch_size: 640
-    outlier_trim_ratio: 0.2
-    min_consensus_ratio: 0.7
-    max_shift_mad: 1.5
-    syncnet_checkpoint: null
-    write_manifest: true
 
 training:
   device: cuda

@@ -28,6 +28,7 @@ TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TRAINING_ROOT)
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+from config_loader import load_config
 
 from training.data.dataset import LipSyncDataset
 from training.scripts.dataset_roots import get_dataset_roots
@@ -174,7 +175,7 @@ def summarize_batch_metrics(batch_metrics):
 def main():
     args = parse_args()
     rng = random.Random(args.seed)
-    cfg = yaml.safe_load(open(args.config))
+    cfg = load_config(args.config)
     allowlist = load_allowlist(args.speaker_list)
     dataset = build_dataset(cfg, allowlist)
 

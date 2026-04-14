@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import yaml
+from config_loader import load_config
 
 
 TRAINING_ROOT = Path(__file__).resolve().parents[1]
@@ -27,11 +28,6 @@ def log(message):
 
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
     print(f"[watcher] {ts} {message}", flush=True)
-
-
-def load_yaml(path):
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 def save_yaml(path, data):
@@ -259,8 +255,8 @@ def main():
         args.generator_val_speaker_list,
     )
 
-    sync_cfg = load_yaml(syncnet_config_path)
-    template_cfg = load_yaml(generator_template_config)
+    sync_cfg = load_config(syncnet_config_path)
+    template_cfg = load_config(generator_template_config)
 
     sync_epochs = sync_cfg.get("syncnet", {}).get("epochs")
     wait_for_syncnet(

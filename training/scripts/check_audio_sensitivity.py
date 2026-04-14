@@ -19,7 +19,6 @@ import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-import yaml
 
 
 TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,6 +27,7 @@ REPO_ROOT = os.path.dirname(TRAINING_ROOT)
 sys.path.insert(0, TRAINING_ROOT)
 from data import LipSyncDataset
 from models import LipSyncGenerator, SyncNet as LocalSyncNet
+from scripts.config_loader import load_config as load_merged_config
 from scripts.dataset_roots import get_dataset_roots
 
 
@@ -89,8 +89,7 @@ def load_config(checkpoint_path, config_path=None):
     ck = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     cfg = ck["config"]
     if config_path:
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f)
+        cfg = load_merged_config(config_path)
     return ck, cfg
 
 

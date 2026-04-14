@@ -18,10 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-try:
-    import yaml
-except ModuleNotFoundError:
-    yaml = None
+from config_loader import load_config
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -44,17 +41,10 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_yaml(path: Path) -> dict:
-    if yaml is None:
-        raise RuntimeError("PyYAML is required unless --output-dir is provided explicitly")
-    with path.open() as f:
-        return yaml.safe_load(f)
-
-
 def syncnet_output_dir(config_path: Path, output_dir: str | None) -> Path:
     if output_dir:
         return (TRAINING_ROOT / output_dir / "syncnet").resolve()
-    cfg = load_yaml(config_path)
+    cfg = load_config(config_path)
     return (TRAINING_ROOT / cfg["training"]["output_dir"] / "syncnet").resolve()
 
 

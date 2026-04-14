@@ -28,6 +28,7 @@ sys.path.insert(0, TRAINING_ROOT)
 from syncnet import SyncNet
 from syncnet_mirror import SyncNetMirror
 from data import LipSyncDataset
+from config_loader import load_config
 from scripts.dataset_roots import get_dataset_roots
 
 
@@ -635,8 +636,7 @@ def main():
     if args.resume and args.init_model:
         raise ValueError("--resume and --init-model are mutually exclusive")
 
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     device = cfg["training"]["device"]
     model_type = cfg["syncnet"].get("model_type", "local")

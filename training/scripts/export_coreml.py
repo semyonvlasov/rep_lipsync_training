@@ -18,6 +18,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models import LipSyncGenerator
+from config_loader import load_config
 
 
 def main():
@@ -33,9 +34,7 @@ def main():
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     cfg = ck["config"]
     if args.config:
-        import yaml
-        with open(args.config) as f:
-            cfg = yaml.safe_load(f)
+        cfg = load_config(args.config)
     img_size = cfg["model"]["img_size"]
     predict_alpha = cfg["model"]["predict_alpha"]
 

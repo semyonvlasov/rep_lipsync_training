@@ -28,16 +28,12 @@ import yaml
 TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(TRAINING_ROOT, "scripts"))
 import check_audio_sensitivity as cas
+from config_loader import load_config
 
 
 EPOCH_RE = re.compile(
     r"Epoch\s+(?P<epoch>\d+)/(?P<epochs>\d+):.*?reward=(?P<reward>-?\d+(?:\.\d+)?)"
 )
-
-
-def load_yaml(path):
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 def write_yaml(path, data):
@@ -199,7 +195,7 @@ def main():
     parser.add_argument("--speaker-list", default=None)
     args = parser.parse_args()
 
-    cfg = load_yaml(args.config)
+    cfg = load_config(args.config)
     total_epochs = int(cfg["generator"]["epochs"])
     output_dir = cfg["training"]["output_dir"]
     abs_output_dir = os.path.join(TRAINING_ROOT, output_dir)

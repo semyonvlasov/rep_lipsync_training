@@ -18,6 +18,8 @@ try:
 except ImportError:  # pragma: no cover - optional on bare local machines
     yaml = None
 
+from config_loader import load_config
+
 DEFAULT_DRIVE_ROOT_ID = "1y1P-LI3YTPV65zpHXMSrNYsykN2-s5Pv"
 DEFAULT_DRIVE_ROOT_LINK = "https://drive.google.com/drive/folders/1y1P-LI3YTPV65zpHXMSrNYsykN2-s5Pv?usp=sharing"
 
@@ -205,8 +207,7 @@ def load_training_config(source_dir: Path, config_path: Path | None, artifacts: 
         if yaml is None:
             log(f"[TrainArtifacts] config parsing skipped because PyYAML is not installed: {config_path}")
             return None, str(config_path)
-        with config_path.open(encoding="utf-8") as f:
-            return yaml.safe_load(f), str(config_path)
+        return load_config(config_path), str(config_path)
 
     checkpoint_candidates = [
         Path(item["local_path"])

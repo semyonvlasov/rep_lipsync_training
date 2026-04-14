@@ -40,6 +40,7 @@ from models import (
     SyncNet as LocalSyncNet,
 )
 from data import LipSyncDataset
+from config_loader import load_config
 from scripts.dataset_roots import get_dataset_roots
 
 # Import official SyncNet — avoid module name conflicts with our training/models
@@ -654,8 +655,7 @@ def main():
     if args.resume and args.init_generator:
         raise SystemExit("--resume and --init-generator are mutually exclusive")
 
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     device = cfg["training"]["device"]
     output_dir = os.path.join(cfg["training"]["output_dir"], "generator")

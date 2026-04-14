@@ -23,6 +23,8 @@ from pathlib import Path
 import torch
 import yaml
 
+from config_loader import load_config
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TRAINING_ROOT = SCRIPT_DIR.parent
@@ -84,11 +86,6 @@ def parse_args():
 def run_cmd(cmd: list[str], cwd: Path | None = None):
     print(f"[cmd] {' '.join(cmd)}", flush=True)
     subprocess.run(cmd, check=True, cwd=str(cwd) if cwd else None)
-
-
-def load_yaml(path: Path) -> dict:
-    with path.open() as f:
-        return yaml.safe_load(f)
 
 
 def save_yaml(path: Path, data: dict):
@@ -169,7 +166,7 @@ def main():
     next_epoch = resume_epoch + 1
     total_epochs = next_epoch + 1
 
-    base_cfg = load_yaml(base_config_path)
+    base_cfg = load_config(base_config_path)
     manifest = {
         "base_config": str(base_config_path),
         "resume": str(resume_path),
