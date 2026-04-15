@@ -918,8 +918,8 @@ def eval_model(
     eval_step: int,
     sample_checkpoint_dir: str | None = None,
 ) -> dict[str, float]:
-    eval_steps = int(cfg_mirror["eval_steps"])
-    print(f"Evaluating for {eval_steps} steps at global_step={eval_step}", flush=True)
+    eval_batches_count = int(cfg_mirror["eval_batches_count"])
+    print(f"Evaluating for {eval_batches_count} batches at global_step={eval_step}", flush=True)
     running_sync_loss = []
     running_l1_loss = []
     running_disc_real_loss = []
@@ -961,7 +961,7 @@ def eval_model(
                 save_sample_images(x, g, gt, eval_step, sample_checkpoint_dir)
                 saved_samples = True
 
-            if step > eval_steps:
+            if step > eval_batches_count:
                 break
 
         metrics = {
@@ -1067,7 +1067,7 @@ def resolve_mirror_cfg(cfg: dict) -> dict:
         "sample_interval_steps": int(section.get("sample_interval_steps", 0)),
         "save_sample_images": bool(section.get("save_sample_images", False)),
         "eval_interval_steps": int(section.get("eval_interval_steps", 3000)),
-        "eval_steps": int(section.get("eval_steps", 300)),
+        "eval_batches_count": int(section.get("eval_batches_count", section.get("eval_steps", 300))),
         "eval_seed": int(section.get("eval_seed", 20260408)),
         "train_log_interval_steps": int(section.get("train_log_interval_steps", 50)),
         "save_optimizer_state": bool(section.get("save_optimizer_state", True)),

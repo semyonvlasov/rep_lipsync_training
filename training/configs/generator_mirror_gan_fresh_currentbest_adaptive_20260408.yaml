@@ -35,7 +35,7 @@ generator_mirror_gan:
   save_sample_images: false
   sample_interval_steps: 0
   eval_interval_steps: 500
-  eval_steps: 300
+  eval_batches_count: 300
   eval_seed: 20260408  # fixed val sampling for scheduler stability
   train_log_interval_steps: 50  # plain-text train status line; keep searchable independently of tqdm carriage returns
   save_optimizer_state: true  # legacy knob; periodic recovery checkpoints are always fp16 without optimizer state

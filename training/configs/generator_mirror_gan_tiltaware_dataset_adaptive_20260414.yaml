@@ -35,7 +35,7 @@ generator_mirror_gan:
   save_sample_images: false
   sample_interval_steps: 0
   eval_interval_steps: 500
-  eval_steps: 300
+  eval_batches_count: 300
   eval_seed: 20260408  # fixed val sampling for scheduler stability
   train_log_interval_steps: 50  # plain-text train status line; keep searchable independently of tqdm carriage returns
   save_optimizer_state: true  # legacy knob; periodic recovery checkpoints are always fp16 without optimizer state
@@ -56,7 +56,7 @@ generator_mirror_gan:
   sync_wt_min: 0.0005  # once sync gate ever opens, never let sync weight fall below this floor
   sync_wt_step_up: 0.00025
   sync_wt_step_down: 0.001
-  disc_wt_step_up: 0.0005
+  disc_wt_step_up: 0.00025
   disc_wt_step_down: 0.001
   disc_up_fake_max: 0.8  # only raise disc_wt while fake stays below this value
   disc_hold_abs_gap: 0.5  # if abs(fake-real) exceeds this, forbid disc_wt growth and hold
