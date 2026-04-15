@@ -118,6 +118,8 @@ data:
   min_samples_per_speaker: 0
   materialize_frames_size: 96
   lazy_cache_root: null
+  sync_alignment:
+    syncnet_checkpoint: training/output/syncnet_current_best_20260406/syncnet_best_off_eval.pth
 
 training:
   device: cuda
