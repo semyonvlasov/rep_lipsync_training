@@ -21,6 +21,8 @@ SYNCNET_BATCH_SIZE="${SYNCNET_BATCH_SIZE:-64}"
 FORCE_REBUILD_SPLIT="${FORCE_REBUILD_SPLIT:-0}"
 HDTF_TIERS="${HDTF_TIERS:-confident}"
 TALKVID_TIERS="${TALKVID_TIERS:-confident,medium}"
+PREPARE_TARGET_ELIGIBLE="${PREPARE_TARGET_ELIGIBLE:-0}"
+MAX_TRAIN_COUNT="${MAX_TRAIN_COUNT:-0}"
 
 mkdir -p "$RUN_SYNCNET_DIR" "$SPLIT_DIR"
 
@@ -29,13 +31,15 @@ if [[ "$FORCE_REBUILD_SPLIT" == "1" || ! -f "$TRAIN_SNAPSHOT" || ! -f "$VAL_SNAP
     --config "$CONFIG" \
     --prepared-dir "$PREPARED_DIR" \
     --hdtf-tiers "$HDTF_TIERS" \
-    --talkvid-tiers "$TALKVID_TIERS"
+    --talkvid-tiers "$TALKVID_TIERS" \
+    --target-eligible-total "$PREPARE_TARGET_ELIGIBLE"
   "$PYTHON_BIN" "$TRAINING_ROOT/scripts/build_syncnet_split.py" \
     --prepared-dir "$PREPARED_DIR" \
     --split-dir "$SPLIT_DIR" \
     --val-count "$VAL_COUNT" \
     --target-val-batches "$TARGET_VAL_BATCHES" \
-    --batch-size "$SYNCNET_BATCH_SIZE"
+    --batch-size "$SYNCNET_BATCH_SIZE" \
+    --max-train-count "$MAX_TRAIN_COUNT"
 fi
 
 cd "$REPO_ROOT"
