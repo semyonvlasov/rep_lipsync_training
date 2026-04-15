@@ -231,7 +231,17 @@ def seed_eval_rng(seed, device):
 
 
 def cuda_autocast(enabled):
-    return torch.amp.autocast("cuda", enabled=enabled)
+    amp_mod = getattr(torch, "amp", None)
+    if amp_mod is not None and hasattr(amp_mod, "autocast"):
+        return amp_mod.autocast("cuda", enabled=enabled)
+    return torch.cuda.amp.autocast(enabled=enabled)
+
+
+def cuda_grad_scaler(enabled):
+    amp_mod = getattr(torch, "amp", None)
+    if amp_mod is not None and hasattr(amp_mod, "GradScaler"):
+        return amp_mod.GradScaler("cuda", enabled=enabled)
+    return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
 def evaluate_syncnet_model(model, model_type, loader, device, max_batches=None, use_amp=False, seed=None):
@@ -737,7 +747,7 @@ def main():
         )
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg["syncnet"]["lr"])
     use_amp = cfg["training"].get("mixed_precision", False) and device == "cuda"
-    scaler = torch.amp.GradScaler("cuda", enabled=use_amp) if device == "cuda" else None
+    scaler = cuda_grad_scaler(use_amp) if device == "cuda" else None
 
     start_epoch = 0
     resume_batches_in_epoch = 0

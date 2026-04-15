@@ -101,7 +101,17 @@ def update_ema(current, value, span):
 
 
 def cuda_autocast(enabled):
-    return torch.amp.autocast("cuda", enabled=enabled)
+    amp_mod = getattr(torch, "amp", None)
+    if amp_mod is not None and hasattr(amp_mod, "autocast"):
+        return amp_mod.autocast("cuda", enabled=enabled)
+    return torch.cuda.amp.autocast(enabled=enabled)
+
+
+def cuda_grad_scaler(enabled):
+    amp_mod = getattr(torch, "amp", None)
+    if amp_mod is not None and hasattr(amp_mod, "GradScaler"):
+        return amp_mod.GradScaler("cuda", enabled=enabled)
+    return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
 def format_eta(seconds):
@@ -765,7 +775,7 @@ def main():
 
     use_amp = cfg["training"]["mixed_precision"] and device == "cuda"
     if device == "cuda":
-        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+        scaler = cuda_grad_scaler(use_amp)
     else:
         scaler = None
 

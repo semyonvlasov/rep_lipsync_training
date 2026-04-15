@@ -195,7 +195,10 @@ def seed_eval_rng(seed: int, device: str) -> None:
 
 
 def cuda_autocast(enabled: bool):
-    return torch.amp.autocast("cuda", enabled=enabled)
+    amp_mod = getattr(torch, "amp", None)
+    if amp_mod is not None and hasattr(amp_mod, "autocast"):
+        return amp_mod.autocast("cuda", enabled=enabled)
+    return torch.cuda.amp.autocast(enabled=enabled)
 
 
 def evaluate_syncnet_model(model, model_type: str, loader, device: str, max_batches=None, use_amp: bool = False, seed: int | None = None):
