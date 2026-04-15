@@ -146,9 +146,12 @@ def main() -> None:
     hdtf_tiers = parse_tiers(args.hdtf_tiers)
     talkvid_tiers = parse_tiers(args.talkvid_tiers)
     roots = selected_roots(TRAINING_ROOT, hdtf_tiers, talkvid_tiers)
+    existing_root_paths = [str(root) for _, _, root in roots if root.exists()]
+    if not existing_root_paths:
+        raise SystemExit("No selected lazy roots exist for SyncNet dataset preparation")
 
     helper = LipSyncDataset(
-        roots=[],
+        roots=existing_root_paths,
         img_size=cfg["model"]["img_size"],
         mel_step_size=cfg["model"]["mel_steps"],
         fps=cfg["data"]["fps"],
