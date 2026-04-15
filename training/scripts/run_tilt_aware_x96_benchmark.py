@@ -42,9 +42,10 @@ def configure_import_roots() -> Path:
         if (candidate / "face_processing" / "__init__.py").exists():
             external_root = candidate
     if external_root is None:
-        candidate = REPO_ROOT.parents[1] / "face_processing"
-        if (candidate / "face_processing" / "__init__.py").exists():
-            external_root = candidate
+        for candidate in (REPO_ROOT.parent / "face_processing", REPO_ROOT.parents[1] / "face_processing"):
+            if (candidate / "face_processing" / "__init__.py").exists():
+                external_root = candidate
+                break
 
     roots = [REPO_ROOT]
     if external_root is not None:
@@ -176,6 +177,7 @@ def resolve_landmarker_path(user_path: str | None) -> str:
     candidates.extend(
         [
             REPO_ROOT / "models" / "face_processing" / DEFAULT_FACE_LANDMARKER_NAME,
+            REPO_ROOT.parent / "face_processing" / "assets" / DEFAULT_FACE_LANDMARKER_NAME,
             REPO_ROOT.parents[1] / "face_processing" / "assets" / DEFAULT_FACE_LANDMARKER_NAME,
         ]
     )
