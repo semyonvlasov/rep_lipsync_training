@@ -352,6 +352,11 @@ def build_pipeline_config(
     cfg.stabilization.enabled = stabilization_enabled
     cfg.save_frame_log = True
     cfg.export.mode = export_mode
+    ffmpeg_override = os.environ.get("FFMPEG_BIN")
+    if ffmpeg_override:
+        cfg.export.ffmpeg_bin = ffmpeg_override
+    elif Path("/usr/bin/ffmpeg").exists():
+        cfg.export.ffmpeg_bin = "/usr/bin/ffmpeg"
     if export_fps is not None:
         cfg.export.fps = max(1, int(round(export_fps)))
     return cfg
