@@ -98,23 +98,28 @@ def syncnet_acc(cos_sim, model_type):
 
 
 def build_syncnet_loader(dataset, cfg, batch_size, device, model_type, shuffle, is_eval=False):
-    num_workers = 0 if is_eval else cfg["data"]["num_workers"]
+    num_workers = (
+        cfg["data"].get("eval_num_workers", cfg["data"]["num_workers"])
+        if is_eval else cfg["data"]["num_workers"]
+    )
     loader_kwargs = {
         "batch_size": batch_size,
         "shuffle": shuffle,
         "num_workers": num_workers,
     }
+    loader_kwargs["pin_memory"] = (device == "cuda")
+    if device == "cuda":
+        loader_kwargs["pin_memory_device"] = "cuda"
+    if not is_eval and model_type != "mirror":
+        loader_kwargs["drop_last"] = True
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = cfg["data"].get("persistent_workers", True)
+        prefetch_factor = cfg["data"].get("prefetch_factor")
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
     if model_type != "mirror":
-        loader_kwargs["pin_memory"] = (device == "cuda")
-        if not is_eval:
-            loader_kwargs["drop_last"] = True
         if device == "cuda":
             loader_kwargs["pin_memory_device"] = "cuda"
-        if not is_eval and cfg["data"]["num_workers"] > 0:
-            loader_kwargs["persistent_workers"] = cfg["data"].get("persistent_workers", True)
-            prefetch_factor = cfg["data"].get("prefetch_factor")
-            if prefetch_factor is not None:
-                loader_kwargs["prefetch_factor"] = prefetch_factor
     return DataLoader(dataset, **loader_kwargs)
 
 

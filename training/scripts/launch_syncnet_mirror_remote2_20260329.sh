@@ -16,6 +16,8 @@ VAL_SNAPSHOT="$SPLIT_DIR/val_snapshot.txt"
 SPLIT_SUMMARY="$SPLIT_DIR/summary.json"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VAL_COUNT="${VAL_COUNT:-2048}"
+TARGET_VAL_BATCHES="${TARGET_VAL_BATCHES:-2000}"
+SYNCNET_BATCH_SIZE="${SYNCNET_BATCH_SIZE:-64}"
 FORCE_REBUILD_SPLIT="${FORCE_REBUILD_SPLIT:-0}"
 HDTF_TIERS="${HDTF_TIERS:-confident}"
 TALKVID_TIERS="${TALKVID_TIERS:-confident,medium}"
@@ -31,7 +33,9 @@ if [[ "$FORCE_REBUILD_SPLIT" == "1" || ! -f "$TRAIN_SNAPSHOT" || ! -f "$VAL_SNAP
   "$PYTHON_BIN" "$TRAINING_ROOT/scripts/build_syncnet_split.py" \
     --prepared-dir "$PREPARED_DIR" \
     --split-dir "$SPLIT_DIR" \
-    --val-count "$VAL_COUNT"
+    --val-count "$VAL_COUNT" \
+    --target-val-batches "$TARGET_VAL_BATCHES" \
+    --batch-size "$SYNCNET_BATCH_SIZE"
 fi
 
 cd "$REPO_ROOT"
