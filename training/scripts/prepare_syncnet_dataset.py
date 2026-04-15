@@ -140,7 +140,6 @@ def main() -> None:
     parser.add_argument("--hdtf-tiers", default="confident")
     parser.add_argument("--talkvid-tiers", default="confident,medium")
     parser.add_argument("--log-every", type=int, default=100)
-    parser.add_argument("--target-eligible-total", type=int, default=0)
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -180,7 +179,6 @@ def main() -> None:
     source_counts: dict[str, int] = {}
     effective_frames_total = 0
     started = time.time()
-    target_eligible_total = max(0, int(args.target_eligible_total or 0))
 
     for idx, entry in enumerate(entries, start=1):
         meta = helper._ensure_entry_sync_alignment(entry)
@@ -223,13 +221,6 @@ def main() -> None:
                 f"failed={len(failed_manifest)} short={len(short_manifest)} rate={rate:.2f} clips/s"
             )
 
-        if target_eligible_total > 0 and len(eligible_manifest) >= target_eligible_total:
-            log(
-                f"Reached target eligible_total={target_eligible_total}; "
-                f"stopping early at {idx}/{len(entries)} scanned clips"
-            )
-            break
-
     prepared_dir = Path(args.prepared_dir)
     prepared_dir.mkdir(parents=True, exist_ok=True)
     (prepared_dir / "eligible_snapshot.txt").write_text(
@@ -256,7 +247,6 @@ def main() -> None:
                 "failed_sync_alignment": len(failed_manifest),
                 "too_short_after_alignment": len(short_manifest),
                 "effective_frames_total": effective_frames_total,
-                "target_eligible_total": target_eligible_total,
                 "min_frames_required": min_frames,
                 "hdtf_tiers": hdtf_tiers,
                 "talkvid_tiers": talkvid_tiers,

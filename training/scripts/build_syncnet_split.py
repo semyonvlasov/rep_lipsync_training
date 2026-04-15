@@ -58,7 +58,6 @@ def main() -> None:
     parser.add_argument("--val-count", type=int, default=2048)
     parser.add_argument("--target-val-batches", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--max-train-count", type=int, default=0)
     args = parser.parse_args()
 
     prepared_dir = Path(args.prepared_dir)
@@ -74,9 +73,6 @@ def main() -> None:
         target_val_batches=args.target_val_batches,
         batch_size=args.batch_size,
     )
-    max_train_count = max(0, int(args.max_train_count or 0))
-    if max_train_count > 0 and len(train_items) > max_train_count:
-        train_items = train_items[:max_train_count]
     train_names = [item["name"] for item in train_items]
     val_names = [item["name"] for item in val_items]
     train_effective_frames = sum(int(item.get("frame_count") or 0) for item in train_items)
@@ -94,7 +90,6 @@ def main() -> None:
                 "split_mode": split_meta["mode"],
                 "target_val_batches": split_meta["target_val_batches"],
                 "target_val_frames": split_meta["target_val_frames"],
-                "max_train_count": max_train_count or None,
                 "batch_size": int(args.batch_size),
                 "train_count": len(train_names),
                 "val_count": len(val_names),
