@@ -9,6 +9,91 @@ import sys
 from typing import Any
 
 
+def _probe_torch_subprocess() -> dict[str, Any]:
+    cmd = [
+        sys.executable,
+        "-c",
+        """
+import json
+import sys
+
+info = {}
+try:
+    import torch  # type: ignore
+except Exception as exc:
+    info["torch_import_ok"] = False
+    info["error"] = repr(exc)
+    print(json.dumps(info, sort_keys=True, ensure_ascii=True))
+    raise SystemExit(0)
+
+info["torch_import_ok"] = True
+info["torch_version"] = getattr(torch, "__version__", "<unknown>")
+
+try:
+    info["cuda_available"] = bool(torch.cuda.is_available())
+except Exception as exc:
+    info["cuda_available"] = False
+    info["cuda_available_error"] = repr(exc)
+    print(json.dumps(info, sort_keys=True, ensure_ascii=True))
+    raise SystemExit(0)
+
+if info["cuda_available"]:
+    try:
+        info["device_name"] = torch.cuda.get_device_name(0)
+    except Exception as exc:
+        info["device_name_error"] = repr(exc)
+
+    required_arch = None
+    try:
+        major, minor = torch.cuda.get_device_capability(0)
+        required_arch = f"sm_{major}{minor}"
+        info["device_capability"] = [major, minor]
+        info["required_arch"] = required_arch
+    except Exception as exc:
+        info["device_capability_error"] = repr(exc)
+
+    try:
+        arch_list = list(torch.cuda.get_arch_list())
+        info["arch_list"] = arch_list
+        if required_arch is not None:
+            info["arch_supported"] = required_arch in arch_list
+    except Exception as exc:
+        info["arch_list_error"] = repr(exc)
+
+    try:
+        value = (torch.zeros((1,), device="cuda") + 1).sum().item()
+        info["simple_cuda_ok"] = True
+        info["simple_cuda_value"] = float(value)
+    except Exception as exc:
+        info["simple_cuda_ok"] = False
+        info["simple_cuda_error"] = str(exc)
+
+print(json.dumps(info, sort_keys=True, ensure_ascii=True))
+""",
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return {
+            "torch_import_ok": False,
+            "error": (
+                f"probe_subprocess_failed(returncode={result.returncode}, "
+                f"stderr={result.stderr.strip()!r})"
+            ),
+        }
+    stdout = result.stdout.strip()
+    if not stdout:
+        return {
+            "torch_import_ok": False,
+            "error": "probe_subprocess_returned_empty_stdout",
+        }
+    return json.loads(stdout)
+
+
 def _gpu_present() -> bool:
     if shutil.which("nvidia-smi") is None:
         return False
@@ -142,7 +227,7 @@ def main() -> int:
 
     if repair_needed:
         _install_cuda_torch(args)
-        final = _probe_torch()
+        final = _probe_torch_subprocess()
         print(
             "[ensure-torch-cuda] final_probe="
             + json.dumps(final, sort_keys=True, ensure_ascii=True),
