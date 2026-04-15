@@ -34,6 +34,9 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FACE_LANDMARKER_NAME = "face_landmarker_v2_with_blendshapes.task"
 
+if Path("/usr/bin/ffmpeg").exists():
+    os.environ["PATH"] = f"/usr/bin:{os.environ.get('PATH', '')}"
+
 def configure_import_roots() -> Path:
     external_root = None
     env_root = os.environ.get("FACE_PROCESSING_REPO_ROOT")
