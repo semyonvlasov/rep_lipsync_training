@@ -34,8 +34,32 @@ from tqdm import tqdm
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FACE_LANDMARKER_NAME = "face_landmarker_v2_with_blendshapes.task"
 
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+def configure_import_roots() -> Path:
+    external_root = None
+    env_root = os.environ.get("FACE_PROCESSING_REPO_ROOT")
+    if env_root:
+        candidate = Path(env_root).expanduser().resolve()
+        if (candidate / "face_processing" / "__init__.py").exists():
+            external_root = candidate
+    if external_root is None:
+        candidate = REPO_ROOT.parents[1] / "face_processing"
+        if (candidate / "face_processing" / "__init__.py").exists():
+            external_root = candidate
+
+    roots = [REPO_ROOT]
+    if external_root is not None:
+        roots.insert(0, external_root)
+
+    for root in reversed(roots):
+        root_str = str(root)
+        if root_str in sys.path:
+            sys.path.remove(root_str)
+        sys.path.insert(0, root_str)
+
+    return external_root or REPO_ROOT
+
+
+FACE_PROCESSING_IMPORT_ROOT = configure_import_roots()
 
 from face_processing.config import PipelineConfig
 from face_processing.crop_export import compute_output_size, export_segment, prepare_segment_crop_geometry
@@ -58,6 +82,8 @@ IMG_SIZE = 96
 BENCH_EXPORT_MODE = "pad_to_square"
 BENCH_STABILIZED = True
 LOGGER = logging.getLogger("tilt_aware_x96_benchmark")
+
+print(f"[TiltBench] face_processing import root: {FACE_PROCESSING_IMPORT_ROOT}", flush=True)
 
 
 def parse_args():
