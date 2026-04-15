@@ -34,12 +34,18 @@ def parse_tiers(value: str) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
-def selected_roots(training_root: Path, hdtf_tiers: list[str], talkvid_tiers: list[str]) -> list[tuple[str, str, Path]]:
+def selected_roots(
+    training_root: Path,
+    hdtf_tiers: list[str],
+    talkvid_tiers: list[str],
+    hdtf_root_rel: str,
+    talkvid_root_rel: str,
+) -> list[tuple[str, str, Path]]:
     roots: list[tuple[str, str, Path]] = []
     for tier in hdtf_tiers:
-        roots.append(("hdtf", tier, training_root / "data" / "hdtf" / "processed" / "_lazy_imports" / tier))
+        roots.append(("hdtf", tier, training_root / hdtf_root_rel / "_lazy_imports" / tier))
     for tier in talkvid_tiers:
-        roots.append(("talkvid", tier, training_root / "data" / "talkvid" / "processed" / "_lazy_imports" / tier))
+        roots.append(("talkvid", tier, training_root / talkvid_root_rel / "_lazy_imports" / tier))
     return roots
 
 
@@ -139,13 +145,23 @@ def main() -> None:
     parser.add_argument("--prepared-dir", required=True)
     parser.add_argument("--hdtf-tiers", default="confident")
     parser.add_argument("--talkvid-tiers", default="confident,medium")
+    parser.add_argument("--hdtf-root-rel", default=None)
+    parser.add_argument("--talkvid-root-rel", default=None)
     parser.add_argument("--log-every", type=int, default=100)
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     hdtf_tiers = parse_tiers(args.hdtf_tiers)
     talkvid_tiers = parse_tiers(args.talkvid_tiers)
-    roots = selected_roots(TRAINING_ROOT, hdtf_tiers, talkvid_tiers)
+    hdtf_root_rel = args.hdtf_root_rel or cfg["data"].get("hdtf_root", "data/hdtf/processed")
+    talkvid_root_rel = args.talkvid_root_rel or cfg["data"].get("talkvid_root", "data/talkvid/processed")
+    roots = selected_roots(
+        TRAINING_ROOT,
+        hdtf_tiers,
+        talkvid_tiers,
+        hdtf_root_rel,
+        talkvid_root_rel,
+    )
     existing_root_paths = [str(root) for _, _, root in roots if root.exists()]
     if not existing_root_paths:
         raise SystemExit("No selected lazy roots exist for SyncNet dataset preparation")
@@ -250,6 +266,8 @@ def main() -> None:
                 "min_frames_required": min_frames,
                 "hdtf_tiers": hdtf_tiers,
                 "talkvid_tiers": talkvid_tiers,
+                "hdtf_root_rel": hdtf_root_rel,
+                "talkvid_root_rel": talkvid_root_rel,
                 "source_counts": source_counts,
                 "scan_stats": scan_stats,
             },
