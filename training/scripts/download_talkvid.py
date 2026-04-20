@@ -310,7 +310,10 @@ def download_clip(
     except Exception:
         return False, "bad_time", 0, None
 
-    tmp_dir = tempfile.mkdtemp(prefix="talkvid_dl_")
+    output_parent = os.path.dirname(output_path) or "."
+    tmp_root = os.path.join(output_parent, ".tmp")
+    os.makedirs(tmp_root, exist_ok=True)
+    tmp_dir = tempfile.mkdtemp(prefix="talkvid_dl_", dir=tmp_root)
     tmp_template = os.path.join(tmp_dir, "clip.%(ext)s")
     try:
         cmd = [
