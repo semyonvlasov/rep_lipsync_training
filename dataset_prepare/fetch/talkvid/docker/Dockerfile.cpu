@@ -6,15 +6,22 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
+      curl \
       ffmpeg \
       git \
       libsndfile1 \
       rclone \
     && rm -rf /var/lib/apt/lists/*
 
+RUN curl -fsSL https://deno.land/install.sh | sh -s -- -y
+
+ENV PATH="/root/.deno/bin:${PATH}"
+
 COPY training/requirements-server.txt /tmp/bootstrap/requirements-server.txt
 
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r /tmp/bootstrap/requirements-server.txt yt-dlp
+    && python -m pip install -r /tmp/bootstrap/requirements-server.txt yt-dlp \
+    && deno --version \
+    && yt-dlp --version
 
 WORKDIR /workspace/repo
