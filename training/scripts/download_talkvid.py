@@ -27,7 +27,7 @@ TALKVID_METADATA_URLS = {
     "raw_filtered": "https://huggingface.co/datasets/FreedomIntelligence/TalkVid/resolve/main/data/filtered_video_clips.json?download=true",
 }
 
-SOURCE_FATAL_REASONS = {"video_unavailable", "private_video"}
+SOURCE_FATAL_REASONS = {"video_unavailable", "private_video", "format_unavailable"}
 RATE_LIMIT_MARKERS = (
     "rate-limited by youtube",
     "current session has been rate-limited by youtube",
@@ -317,7 +317,7 @@ def download_clip(
             "yt-dlp",
             "--remote-components", "ejs:github",
             "-f",
-            f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]/best[height<={max_height}][ext=mp4]/best[height<={max_height}]",
+            f"bestvideo*[height<={max_height}]+bestaudio*/best*[height<={max_height}]/best",
             "--merge-output-format", "mp4",
             "--download-sections", f"*{start:.3f}-{end:.3f}",
             "--force-keyframes-at-cuts",
@@ -380,7 +380,11 @@ def download_clip(
             return False, "rate_limited", 0, detail
         if "private video" in lowered:
             return False, "private_video", 0, detail
-        if "video unavailable" in lowered or "this video is unavailable" in lowered:
+        if (
+            "video unavailable" in lowered
+            or "this video is unavailable" in lowered
+            or "removed for violating youtube's terms of service" in lowered
+        ):
             return False, "video_unavailable", 0, detail
         if "confirm you’re not a bot" in lowered or "confirm you're not a bot" in lowered:
             return False, "bot_check", 0, detail
