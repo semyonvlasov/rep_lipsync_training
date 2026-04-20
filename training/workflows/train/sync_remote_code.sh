@@ -65,6 +65,7 @@ ensure_git_checkout() {
 
   if [ -d "$REMOTE_ROOT/.git" ]; then
     cd "$REMOTE_ROOT"
+    git config --global --add safe.directory "$REMOTE_ROOT"
     git remote set-url origin "$REMOTE_GIT_URL"
     git fetch --depth 1 origin "$REMOTE_GIT_BRANCH"
     git checkout -B "$REMOTE_GIT_BRANCH" "origin/$REMOTE_GIT_BRANCH"
@@ -90,6 +91,7 @@ ensure_git_checkout() {
 
   rm -rf "$REMOTE_ROOT"
   git clone --branch "$REMOTE_GIT_BRANCH" --depth 1 "$REMOTE_GIT_URL" "$REMOTE_ROOT"
+  git config --global --add safe.directory "$REMOTE_ROOT"
 
   if [ -d "$preserve_root/training/data" ]; then
     rm -rf "$REMOTE_ROOT/training/data"

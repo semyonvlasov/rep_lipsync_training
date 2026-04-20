@@ -479,7 +479,11 @@ def download_clip(
             return False, "rate_limited", 0, detail
         if "private video" in lowered:
             return False, "private_video", 0, detail
-        if "video unavailable" in lowered or "this video is unavailable" in lowered:
+        if (
+            "video unavailable" in lowered
+            or "this video is unavailable" in lowered
+            or "removed for violating youtube's terms of service" in lowered
+        ):
             return False, "video_unavailable", 0, detail
         if "confirm you’re not a bot" in lowered or "confirm you're not a bot" in lowered:
             return False, "bot_check", 0, detail

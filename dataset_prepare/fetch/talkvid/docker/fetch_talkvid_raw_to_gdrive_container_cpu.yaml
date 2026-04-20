@@ -1,0 +1,12 @@
+extends: ../configs/default.yaml
+
+runtime:
+  python_bin: python3
+
+paths:
+  workspace_root: /workspace-data/talkvid
+  log_folder: /workspace-data/talkvid/logs
+
+cookies:
+  file: /workspace-data/secrets/youtube_cookies.txt
+  from_browser: ""

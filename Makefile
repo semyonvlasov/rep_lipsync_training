@@ -33,6 +33,21 @@ DOCKER_PROCESS_CONFIG_PATH ?= dataset_prepare/process/docker/process_raw_archive
 DOCKER_PROCESS_DATA_ROOT ?= /root/.cache/rep_lipsync_training/process-docker
 DOCKER_PROCESS_PID_PATH ?= $(DOCKER_PROCESS_DATA_ROOT)/process.pid
 DOCKER_PROCESS_LOG_PATH ?= $(DOCKER_PROCESS_DATA_ROOT)/process/logs/raw_drive.log
+DOCKER_TALKVID_FETCH_IMAGE ?= rep-lipsync-talkvid-fetch-cpu:latest
+DOCKER_TALKVID_FETCH_CONTAINER ?= rep-lipsync-talkvid-fetch-cpu
+DOCKER_TALKVID_FETCH_CONFIG_PATH ?= dataset_prepare/fetch/talkvid/docker/fetch_talkvid_raw_to_gdrive_container_cpu.yaml
+DOCKER_TALKVID_FETCH_DATA_ROOT ?= /root/.cache/rep_lipsync_training/talkvid-fetch
+DOCKER_TALKVID_FETCH_STATE_ROOT ?= $(DOCKER_TALKVID_FETCH_DATA_ROOT)/talkvid
+DOCKER_TALKVID_FETCH_PID_PATH ?= $(DOCKER_TALKVID_FETCH_DATA_ROOT)/fetch.pid
+DOCKER_TALKVID_FETCH_LOG_PATH ?= $(DOCKER_TALKVID_FETCH_STATE_ROOT)/logs/cycle.log
+DOCKER_TALKVID_FETCH_COOKIES_REMOTE_PATH ?= $(DOCKER_TALKVID_FETCH_DATA_ROOT)/secrets/youtube_cookies.txt
+TALKVID_COOKIES_PATH ?= /tmp/talkvid_local_cookies.txt
+TALKVID_FETCH_START_FROM_BATCH ?=
+TALKVID_FETCH_RESUME_BATCH ?=
+TALKVID_FETCH_START_FROM_CLIP_ID ?=
+TALKVID_FETCH_START_AFTER_CLIP_ID ?=
+TALKVID_FETCH_REFERENCE_MANIFEST ?=
+TALKVID_FETCH_REVERSE ?= 0
 
 SERVER_PY_REQUIREMENTS := $(TRAINING_ROOT)/requirements-server.txt
 FETCH_VENV ?= $(REPO_ROOT)/.venv-fetch
@@ -132,7 +147,7 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-bootstrap-benchmarks remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-fetch-face-processing-model remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip bench-tilt-aware-x96 publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-bootstrap-talkvid-fetch-docker remote-bootstrap-benchmarks remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail remote-docker-talkvid-fetch-build remote-docker-talkvid-fetch-state remote-docker-talkvid-fetch-cookies remote-docker-talkvid-fetch-start remote-docker-talkvid-fetch-stop remote-docker-talkvid-fetch-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-fetch-face-processing-model remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip bench-tilt-aware-x96 publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -148,6 +163,10 @@ help:
 	@echo "  make remote-docker-process-start # start the disposable Docker CPU raw->lazy worker on a remote"
 	@echo "  make remote-docker-process-stop # stop the disposable Docker CPU raw->lazy worker on a remote"
 	@echo "  make remote-docker-process-tail # tail the disposable Docker CPU worker log on a remote"
+	@echo "  make remote-bootstrap-talkvid-fetch-docker # prepare a remote Linux box for disposable Docker TalkVid fetch over SSH"
+	@echo "  make remote-docker-talkvid-fetch-start # start the disposable Docker TalkVid fetch worker on a remote"
+	@echo "  make remote-docker-talkvid-fetch-stop # stop the disposable Docker TalkVid fetch worker on a remote"
+	@echo "  make remote-docker-talkvid-fetch-tail # tail the disposable Docker TalkVid fetch worker log on a remote"
 	@echo "  make remote-prewarm-sfd # legacy SFD checkpoint warmup (not used by the current face_processing pipeline)"
 	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
 	@echo "  make remote-observe-system # start the remote system observer"
@@ -224,6 +243,7 @@ help:
 	@echo "  make remote-bootstrap-process-lazy REMOTE=root@ssh9.vast.ai PORT=24380 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training REMOTE_PYTHON=python3"
 	@echo "  make remote-bootstrap-benchmarks REMOTE=root@ssh9.vast.ai PORT=24380 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training REMOTE_PYTHON=python3 FACE_PROCESSING_MODEL_PATH=/Users/semenvlasov/Documents/repos/face_processing/assets/face_landmarker_v2_with_blendshapes.task"
 	@echo "  make remote-bootstrap-process-docker REMOTE=root@192.168.1.34 PORT=22 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training FACE_PROCESSING_MODEL_PATH=/Users/semenvlasov/Documents/repos/face_processing/assets/face_landmarker_v2_with_blendshapes.task"
+	@echo "  make remote-bootstrap-talkvid-fetch-docker REMOTE=root@192.168.1.34 PORT=22 REMOTE_ROOT=/root/lipsync_test/rep_lipsync_training TALKVID_COOKIES_PATH=/tmp/talkvid_local_cookies.txt"
 
 bootstrap-fetch:
 	@set -euo pipefail; \
@@ -440,7 +460,14 @@ remote-docker-host-setup:
 			sudo_cmd='sudo'; \
 		fi; \
 		\$$sudo_cmd apt-get update; \
-		DEBIAN_FRONTEND=noninteractive \$$sudo_cmd apt-get install -y ca-certificates docker.io; \
+		DEBIAN_FRONTEND=noninteractive \$$sudo_cmd apt-get install -y ca-certificates; \
+		if command -v docker >/dev/null 2>&1; then \
+			:; \
+		elif apt-cache show docker-ce >/dev/null 2>&1; then \
+			DEBIAN_FRONTEND=noninteractive \$$sudo_cmd apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; \
+		else \
+			DEBIAN_FRONTEND=noninteractive \$$sudo_cmd apt-get install -y docker.io; \
+		fi; \
 		\$$sudo_cmd systemctl enable --now docker; \
 		docker --version; \
 	"
@@ -477,6 +504,57 @@ remote-docker-process-build:
 
 remote-bootstrap-process-docker: remote-sync-code remote-rclone-config remote-docker-host-setup remote-docker-process-model remote-docker-process-build
 	@echo "remote-bootstrap-process-docker complete: $(REMOTE):$(REMOTE_ROOT)"
+
+remote-docker-talkvid-fetch-build:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		cd '$(REMOTE_ROOT)'; \
+		docker build -f dataset_prepare/fetch/talkvid/docker/Dockerfile.cpu -t '$(DOCKER_TALKVID_FETCH_IMAGE)' .; \
+	"
+	@echo "remote-docker-talkvid-fetch-build complete: $(REMOTE):$(DOCKER_TALKVID_FETCH_IMAGE)"
+
+remote-docker-talkvid-fetch-state:
+	@set -euo pipefail; \
+	state_files=( \
+		"data/dataset_prepare/fetch/talkvid/download_manifest.jsonl" \
+		"data/dataset_prepare/fetch/talkvid/talkvid_raw_dataset.jsonl" \
+		"data/dataset_prepare/fetch/talkvid/next_fetch_batch_index.txt" \
+		"data/dataset_prepare/fetch/talkvid/archives/batches_manifest.jsonl" \
+		"data/dataset_prepare/fetch/talkvid/archives/uploaded_manifest.jsonl" \
+		"data/dataset_prepare/fetch/talkvid/metadata/talkvid_with_captions.json" \
+		"data/dataset_prepare/fetch/talkvid/metadata/talkvid_raw_filtered.json" \
+	); \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		mkdir -p '$(DOCKER_TALKVID_FETCH_STATE_ROOT)/archives' '$(DOCKER_TALKVID_FETCH_STATE_ROOT)/metadata' '$(DOCKER_TALKVID_FETCH_STATE_ROOT)/batches'; \
+	"; \
+	for rel in "$${state_files[@]}"; do \
+		src="$(REPO_ROOT)/$$rel"; \
+		if [ ! -f "$$src" ]; then \
+			continue; \
+		fi; \
+		dst_rel="$${rel#data/dataset_prepare/fetch/talkvid/}"; \
+		scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$(PORT)" \
+			"$$src" "$(REMOTE):$(DOCKER_TALKVID_FETCH_STATE_ROOT)/$$dst_rel"; \
+	done
+	@echo "remote-docker-talkvid-fetch-state complete: $(REMOTE):$(DOCKER_TALKVID_FETCH_STATE_ROOT)"
+
+remote-docker-talkvid-fetch-cookies:
+	@set -euo pipefail; \
+	if [ ! -f "$(TALKVID_COOKIES_PATH)" ]; then \
+		echo "remote-docker-talkvid-fetch-cookies: missing cookies file $(TALKVID_COOKIES_PATH)"; \
+		exit 1; \
+	fi; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		mkdir -p '$(dir $(DOCKER_TALKVID_FETCH_COOKIES_REMOTE_PATH))'; \
+	"; \
+	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$(PORT)" \
+		"$(TALKVID_COOKIES_PATH)" "$(REMOTE):$(DOCKER_TALKVID_FETCH_COOKIES_REMOTE_PATH)"
+	@echo "remote-docker-talkvid-fetch-cookies complete: $(REMOTE):$(DOCKER_TALKVID_FETCH_COOKIES_REMOTE_PATH)"
+
+remote-bootstrap-talkvid-fetch-docker: remote-sync-code remote-rclone-config remote-docker-host-setup remote-docker-talkvid-fetch-build remote-docker-talkvid-fetch-state remote-docker-talkvid-fetch-cookies
+	@echo "remote-bootstrap-talkvid-fetch-docker complete: $(REMOTE):$(REMOTE_ROOT)"
 
 remote-docker-process-start:
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
@@ -524,6 +602,61 @@ remote-docker-process-tail:
 		mkdir -p \"$(dir $(DOCKER_PROCESS_LOG_PATH))\"; \
 		touch \"$(DOCKER_PROCESS_LOG_PATH)\"; \
 		tail -n 100 -f \"$(DOCKER_PROCESS_LOG_PATH)\"; \
+	'"
+
+remote-docker-talkvid-fetch-start:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
+		set -euo pipefail; \
+		pid_file=\"$(DOCKER_TALKVID_FETCH_PID_PATH)\"; \
+		if [ -f \"\$$pid_file\" ]; then \
+			existing_pid=\$$(cat \"\$$pid_file\" 2>/dev/null || true); \
+			if [ -n \"\$$existing_pid\" ] && ps -p \"\$$existing_pid\" >/dev/null 2>&1; then \
+				echo \"docker talkvid fetch already running pid=\$$existing_pid\"; \
+				exit 1; \
+			fi; \
+			rm -f \"\$$pid_file\"; \
+		fi; \
+		fetch_args=(); \
+		if [ -n \"$(TALKVID_FETCH_START_FROM_BATCH)\" ]; then fetch_args+=(--start-from-batch \"$(TALKVID_FETCH_START_FROM_BATCH)\"); fi; \
+		if [ -n \"$(TALKVID_FETCH_RESUME_BATCH)\" ]; then fetch_args+=(--resume-batch \"$(TALKVID_FETCH_RESUME_BATCH)\"); fi; \
+		if [ -n \"$(TALKVID_FETCH_START_FROM_CLIP_ID)\" ]; then fetch_args+=(--start-from-clip-id \"$(TALKVID_FETCH_START_FROM_CLIP_ID)\"); fi; \
+		if [ -n \"$(TALKVID_FETCH_START_AFTER_CLIP_ID)\" ]; then fetch_args+=(--start-after-clip-id \"$(TALKVID_FETCH_START_AFTER_CLIP_ID)\"); fi; \
+		if [ -n \"$(TALKVID_FETCH_REFERENCE_MANIFEST)\" ]; then fetch_args+=(--reference-manifest \"$(TALKVID_FETCH_REFERENCE_MANIFEST)\"); fi; \
+		if [ \"$(TALKVID_FETCH_REVERSE)\" = \"1\" ] || [ \"$(TALKVID_FETCH_REVERSE)\" = \"true\" ]; then fetch_args+=(--reverse); fi; \
+		mkdir -p \"$(DOCKER_TALKVID_FETCH_STATE_ROOT)/logs\"; \
+		cd \"$(REMOTE_ROOT)\"; \
+		nohup env DATA_ROOT=\"$(DOCKER_TALKVID_FETCH_DATA_ROOT)\" IMAGE_TAG=\"$(DOCKER_TALKVID_FETCH_IMAGE)\" CONTAINER_NAME=\"$(DOCKER_TALKVID_FETCH_CONTAINER)\" RCLONE_CONFIG_PATH=\"$(REMOTE_RCLONE_CONFIG)\" CONFIG_PATH=\"$(DOCKER_TALKVID_FETCH_CONFIG_PATH)\" SKIP_BUILD=1 dataset_prepare/fetch/talkvid/docker/run_talkvid_fetch_container.sh \"\$${fetch_args[@]}\" < /dev/null > /dev/null 2>&1 & \
+		pid=\$$!; \
+		echo \"\$$pid\" > \"\$$pid_file\"; \
+		sleep 1; \
+		ps -p \"\$$pid\" >/dev/null; \
+		echo \"started pid=\$$pid\"; \
+	'"
+	@echo "remote-docker-talkvid-fetch-start complete: $(REMOTE):$(PORT)"
+
+remote-docker-talkvid-fetch-stop:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
+		set -euo pipefail; \
+		pid_file=\"$(DOCKER_TALKVID_FETCH_PID_PATH)\"; \
+		if [ -f \"\$$pid_file\" ]; then \
+			existing_pid=\$$(cat \"\$$pid_file\" 2>/dev/null || true); \
+			if [ -n \"\$$existing_pid\" ] && ps -p \"\$$existing_pid\" >/dev/null 2>&1; then \
+				kill \"\$$existing_pid\" 2>/dev/null || true; \
+				sleep 1; \
+			fi; \
+			rm -f \"\$$pid_file\"; \
+		fi; \
+		docker rm -f \"$(DOCKER_TALKVID_FETCH_CONTAINER)\" >/dev/null 2>&1 || true; \
+		echo \"stopped\"; \
+	'"
+	@echo "remote-docker-talkvid-fetch-stop complete: $(REMOTE):$(PORT)"
+
+remote-docker-talkvid-fetch-tail:
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "bash -lc '\
+		set -euo pipefail; \
+		mkdir -p \"$(dir $(DOCKER_TALKVID_FETCH_LOG_PATH))\"; \
+		touch \"$(DOCKER_TALKVID_FETCH_LOG_PATH)\"; \
+		tail -n 100 -f \"$(DOCKER_TALKVID_FETCH_LOG_PATH)\"; \
 	'"
 
 remote-faceclip-register:
