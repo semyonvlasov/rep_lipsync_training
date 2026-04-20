@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 THIS_FILE = Path(__file__).resolve()
 REPO_ROOT = THIS_FILE.parents[4]
@@ -147,6 +148,28 @@ def parse_args(default_config: Path) -> argparse.Namespace:
         ),
     )
     return parser.parse_args()
+
+
+def get_str_list(config: dict[str, Any], *keys: str) -> list[str]:
+    node: Any = config
+    walked: list[str] = []
+    for key in keys:
+        walked.append(key)
+        if not isinstance(node, dict) or key not in node:
+            return []
+        node = node[key]
+    if node in (None, ""):
+        return []
+    if isinstance(node, str):
+        return [node]
+    if isinstance(node, list):
+        values: list[str] = []
+        for item in node:
+            text = str(item).strip()
+            if text:
+                values.append(text)
+        return values
+    raise ConfigError(f"config key {'.'.join(keys)} must be a string or list of strings")
 
 
 def read_next_batch_index(counter_file: Path) -> int:
@@ -330,7 +353,7 @@ def launch_fetch(
     request_min_interval_seconds: float,
     rate_limit_cooldown_seconds: int,
     max_rate_limit_cooldowns: int,
-    cookies_file: str,
+    cookies_files: list[str],
     cookies_from_browser: str,
     cookies_rotate_every_successes: int,
     download_jobs: int,
@@ -386,8 +409,8 @@ def launch_fetch(
     ]
     if cookies_from_browser:
         cmd.extend(["--cookies-from-browser", cookies_from_browser])
-    if cookies_file:
-        cmd.extend(["--cookies-file", cookies_file])
+    for cookie_file in cookies_files:
+        cmd.extend(["--cookies-file", cookie_file])
     if reference_manifest is not None:
         cmd.extend(["--reference-manifest", str(reference_manifest)])
     if reverse:
@@ -461,7 +484,11 @@ def main() -> int:
             download_min_cotracker = get_float(config, "fetch", "download_min_cotracker")
             min_free_gb = get_float(config, "fetch", "min_free_gb")
             download_timeout = get_int(config, "fetch", "download_timeout")
-            cookies_file = get_str(config, "cookies", "file", allow_empty=True)
+            cookies_files = get_str_list(config, "cookies", "files")
+            if not cookies_files:
+                legacy_cookie_file = get_str(config, "cookies", "file", allow_empty=True)
+                if legacy_cookie_file:
+                    cookies_files = [legacy_cookie_file]
             cookies_from_browser = get_str(
                 config, "cookies", "from_browser", allow_empty=True
             )
@@ -504,8 +531,8 @@ def main() -> int:
             )
             if cookies_from_browser:
                 log(f"[cycle] cookies_from_browser={cookies_from_browser}", log_fp=log_fp)
-            if cookies_file:
-                log(f"[cycle] cookies_file={cookies_file}", log_fp=log_fp)
+            for cookie_file in cookies_files:
+                log(f"[cycle] cookies_file={cookie_file}", log_fp=log_fp)
 
             resolved_start_from_clip_id = args.start_from_clip_id
             anchor_batch_name = args.resume_batch or args.start_from_batch
@@ -592,7 +619,7 @@ def main() -> int:
                     request_min_interval_seconds=request_min_interval_seconds,
                     rate_limit_cooldown_seconds=rate_limit_cooldown_seconds,
                     max_rate_limit_cooldowns=max_rate_limit_cooldowns,
-                    cookies_file=cookies_file,
+                    cookies_files=cookies_files,
                     cookies_from_browser=cookies_from_browser,
                     cookies_rotate_every_successes=cookies_rotate_every_successes,
                     download_jobs=download_jobs,

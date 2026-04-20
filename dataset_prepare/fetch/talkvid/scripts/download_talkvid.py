@@ -249,8 +249,9 @@ def build_cookie_sources(args: argparse.Namespace) -> list[tuple[str, str]]:
     sources: list[tuple[str, str]] = []
     if args.cookies_from_browser:
         sources.append((COOKIE_SOURCE_BROWSER, str(args.cookies_from_browser)))
-    if args.cookies_file:
-        sources.append((COOKIE_SOURCE_FILE, str(args.cookies_file)))
+    for cookie_file in args.cookies_file:
+        if cookie_file:
+            sources.append((COOKIE_SOURCE_FILE, str(cookie_file)))
     return sources
 
 
@@ -558,7 +559,12 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Iterate the selected source order backward.",
     )
     parser.add_argument("--delay-seconds", type=int, default=0)
-    parser.add_argument("--cookies-file", default=os.environ.get("YTDLP_COOKIES_FILE"))
+    parser.add_argument(
+        "--cookies-file",
+        action="append",
+        default=[],
+        help="Path to a yt-dlp/Netscape cookies file. Can be passed multiple times.",
+    )
     parser.add_argument("--cookies-from-browser", default=os.environ.get("YTDLP_COOKIES_FROM_BROWSER"))
     parser.add_argument(
         "--cookies-rotate-every-successes",
@@ -591,6 +597,9 @@ def build_argparser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_argparser()
     args = parser.parse_args()
+    env_cookie_file = os.environ.get("YTDLP_COOKIES_FILE")
+    if env_cookie_file and not args.cookies_file:
+        args.cookies_file = [env_cookie_file]
 
     if args.delay_seconds > 0:
         start_ts = time.time() + args.delay_seconds
@@ -662,8 +671,8 @@ def main() -> int:
         log(f"[TalkVid] reference_manifest_missing_ids={reference_manifest_missing_ids}")
     if args.cookies_from_browser:
         log(f"[TalkVid] cookies_from_browser={args.cookies_from_browser}")
-    if args.cookies_file:
-        log(f"[TalkVid] cookies_file={args.cookies_file}")
+    for cookie_file in args.cookies_file:
+        log(f"[TalkVid] cookies_file={cookie_file}")
     if rotate_every_successes > 0 and len(cookie_sources) >= 2:
         log("[TalkVid] cookie rotation enabled across browser/file sources")
     elif rotate_every_successes > 0:

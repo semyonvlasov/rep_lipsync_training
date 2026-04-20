@@ -8,5 +8,7 @@ paths:
   log_folder: /workspace-data/talkvid/logs
 
 cookies:
-  file: /workspace-data/secrets/youtube_cookies.txt
+  files:
+    - /workspace-data/secrets/youtube_chrome_cookies.txt
+    - /workspace-data/secrets/youtube_safari_cookies.txt
   from_browser: ""

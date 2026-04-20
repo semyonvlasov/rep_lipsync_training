@@ -42,6 +42,10 @@ DOCKER_TALKVID_FETCH_PID_PATH ?= $(DOCKER_TALKVID_FETCH_DATA_ROOT)/fetch.pid
 DOCKER_TALKVID_FETCH_LOG_PATH ?= $(DOCKER_TALKVID_FETCH_STATE_ROOT)/logs/cycle.log
 DOCKER_TALKVID_FETCH_COOKIES_REMOTE_PATH ?= $(DOCKER_TALKVID_FETCH_DATA_ROOT)/secrets/youtube_cookies.txt
 TALKVID_COOKIES_PATH ?= /tmp/talkvid_local_cookies.txt
+DOCKER_TALKVID_FETCH_CHROME_COOKIES_REMOTE_PATH ?= $(DOCKER_TALKVID_FETCH_DATA_ROOT)/secrets/youtube_chrome_cookies.txt
+DOCKER_TALKVID_FETCH_SAFARI_COOKIES_REMOTE_PATH ?= $(DOCKER_TALKVID_FETCH_DATA_ROOT)/secrets/youtube_safari_cookies.txt
+TALKVID_CHROME_COOKIES_PATH ?=
+TALKVID_SAFARI_COOKIES_PATH ?=
 TALKVID_FETCH_START_FROM_BATCH ?=
 TALKVID_FETCH_RESUME_BATCH ?=
 TALKVID_FETCH_START_FROM_CLIP_ID ?=
@@ -147,7 +151,7 @@ PUBLISH_FACE_DET_BATCH_SIZE ?= 4
 PUBLISH_S3FD_PATH ?=
 PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-bootstrap-talkvid-fetch-docker remote-bootstrap-benchmarks remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail remote-docker-talkvid-fetch-build remote-docker-talkvid-fetch-state remote-docker-talkvid-fetch-cookies remote-docker-talkvid-fetch-start remote-docker-talkvid-fetch-stop remote-docker-talkvid-fetch-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-fetch-face-processing-model remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip bench-tilt-aware-x96 publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-bootstrap-talkvid-fetch-docker remote-bootstrap-benchmarks remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail remote-docker-talkvid-fetch-build remote-docker-talkvid-fetch-state remote-docker-talkvid-fetch-cookies remote-docker-talkvid-fetch-cookies-dual remote-docker-talkvid-fetch-start remote-docker-talkvid-fetch-stop remote-docker-talkvid-fetch-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-fetch-face-processing-model remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip bench-tilt-aware-x96 publish-checkpoint-benchmark upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -553,7 +557,33 @@ remote-docker-talkvid-fetch-cookies:
 		"$(TALKVID_COOKIES_PATH)" "$(REMOTE):$(DOCKER_TALKVID_FETCH_COOKIES_REMOTE_PATH)"
 	@echo "remote-docker-talkvid-fetch-cookies complete: $(REMOTE):$(DOCKER_TALKVID_FETCH_COOKIES_REMOTE_PATH)"
 
-remote-bootstrap-talkvid-fetch-docker: remote-sync-code remote-rclone-config remote-docker-host-setup remote-docker-talkvid-fetch-build remote-docker-talkvid-fetch-state remote-docker-talkvid-fetch-cookies
+remote-docker-talkvid-fetch-cookies-dual:
+	@set -euo pipefail; \
+	if [ ! -f "$(TALKVID_CHROME_COOKIES_PATH)" ]; then \
+		echo "remote-docker-talkvid-fetch-cookies-dual: missing chrome cookies file $(TALKVID_CHROME_COOKIES_PATH)"; \
+		exit 1; \
+	fi; \
+	if [ ! -f "$(TALKVID_SAFARI_COOKIES_PATH)" ]; then \
+		echo "remote-docker-talkvid-fetch-cookies-dual: missing safari cookies file $(TALKVID_SAFARI_COOKIES_PATH)"; \
+		exit 1; \
+	fi; \
+	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
+		set -euo pipefail; \
+		mkdir -p '$(dir $(DOCKER_TALKVID_FETCH_CHROME_COOKIES_REMOTE_PATH))'; \
+	"; \
+	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$(PORT)" \
+		"$(TALKVID_CHROME_COOKIES_PATH)" "$(REMOTE):$(DOCKER_TALKVID_FETCH_CHROME_COOKIES_REMOTE_PATH)"; \
+	scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$(PORT)" \
+		"$(TALKVID_SAFARI_COOKIES_PATH)" "$(REMOTE):$(DOCKER_TALKVID_FETCH_SAFARI_COOKIES_REMOTE_PATH)"
+	@echo "remote-docker-talkvid-fetch-cookies-dual complete: $(REMOTE):$(DOCKER_TALKVID_FETCH_CHROME_COOKIES_REMOTE_PATH),$(DOCKER_TALKVID_FETCH_SAFARI_COOKIES_REMOTE_PATH)"
+
+remote-bootstrap-talkvid-fetch-docker: remote-sync-code remote-rclone-config remote-docker-host-setup remote-docker-talkvid-fetch-build remote-docker-talkvid-fetch-state
+	@set -euo pipefail; \
+	if [ -n "$(TALKVID_CHROME_COOKIES_PATH)" ] || [ -n "$(TALKVID_SAFARI_COOKIES_PATH)" ]; then \
+		$(MAKE) remote-docker-talkvid-fetch-cookies-dual REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" TALKVID_CHROME_COOKIES_PATH="$(TALKVID_CHROME_COOKIES_PATH)" TALKVID_SAFARI_COOKIES_PATH="$(TALKVID_SAFARI_COOKIES_PATH)"; \
+	else \
+		$(MAKE) remote-docker-talkvid-fetch-cookies REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" TALKVID_COOKIES_PATH="$(TALKVID_COOKIES_PATH)"; \
+	fi
 	@echo "remote-bootstrap-talkvid-fetch-docker complete: $(REMOTE):$(REMOTE_ROOT)"
 
 remote-docker-process-start:
