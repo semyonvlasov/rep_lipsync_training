@@ -27,7 +27,7 @@ TALKVID_METADATA_URLS = {
     "raw_filtered": "https://huggingface.co/datasets/FreedomIntelligence/TalkVid/resolve/main/data/filtered_video_clips.json?download=true",
 }
 
-SOURCE_FATAL_REASONS = {"video_unavailable", "private_video", "format_unavailable"}
+SOURCE_FATAL_REASONS = {"video_unavailable", "private_video"}
 RATE_LIMIT_MARKERS = (
     "rate-limited by youtube",
     "current session has been rate-limited by youtube",
