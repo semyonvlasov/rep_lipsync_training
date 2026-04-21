@@ -443,7 +443,7 @@ def download_clip(
             "yt-dlp",
             "--remote-components", "ejs:github",
             "-f",
-            f"bestvideo*[height<={max_height}]+bestaudio*/best[height<={max_height}][acodec!=none]/best[acodec!=none]",
+            f"best[height<={max_height}][acodec!=none]/best[acodec!=none]",
             "--merge-output-format", "mp4",
             "--download-sections", f"*{start:.3f}-{end:.3f}",
             "--force-keyframes-at-cuts",
