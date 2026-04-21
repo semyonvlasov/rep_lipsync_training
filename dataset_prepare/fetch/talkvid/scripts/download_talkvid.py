@@ -385,6 +385,29 @@ def cleanup_clip_outputs(output_path: str) -> None:
             pass
 
 
+def has_audio_stream(video_path: str) -> bool:
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+            video_path,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode != 0:
+        raise OSError(f"ffprobe failed for {video_path}: {probe.stderr.strip() or probe.stdout.strip()}")
+    return bool(probe.stdout.strip())
+
+
 def download_clip(
     item: dict,
     output_path: str,
@@ -420,7 +443,7 @@ def download_clip(
             "yt-dlp",
             "--remote-components", "ejs:github",
             "-f",
-            f"bestvideo*[height<={max_height}]+bestaudio*/best*[height<={max_height}]/best",
+            f"bestvideo*[height<={max_height}]+bestaudio*/best[height<={max_height}][acodec!=none]/best[acodec!=none]",
             "--merge-output-format", "mp4",
             "--download-sections", f"*{start:.3f}-{end:.3f}",
             "--force-keyframes-at-cuts",
@@ -470,6 +493,9 @@ def download_clip(
             size_bytes = os.path.getsize(output_path)
         except OSError:
             size_bytes = 0
+        if not has_audio_stream(output_path):
+            cleanup_clip_outputs(output_path)
+            return False, "no_audio_stream", 0, "downloaded mp4 has no audio stream"
         return True, "ok", size_bytes, None
     except subprocess.TimeoutExpired:
         return False, "timeout", 0, None
@@ -614,6 +640,11 @@ def main() -> int:
         subprocess.run(["yt-dlp", "--version"], capture_output=True, check=True)
     except Exception:
         log("[TalkVid] ERROR: yt-dlp is not installed")
+        return 1
+    try:
+        subprocess.run(["ffprobe", "-version"], capture_output=True, check=True)
+    except Exception:
+        log("[TalkVid] ERROR: ffprobe is not installed")
         return 1
 
     output_root = args.output
