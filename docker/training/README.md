@@ -10,7 +10,33 @@ docker buildx build \
   --push .
 ```
 
-Run on a Vast AI host with runtime secrets and persistent workspace mounts:
+Preferred Vast AI flow: set the image when creating/renting the instance.
+
+```bash
+vastai create instance <offer_id> \
+  --image semyonvlasov/lipsync-training:cuda12.8 \
+  --disk 800 \
+  --ssh \
+  --direct
+```
+
+In the Vast UI, use the same value in the Docker image field:
+`semyonvlasov/lipsync-training:cuda12.8`.
+
+After SSH connects to the instance/container, put `rclone.conf` on the host,
+then run the image entrypoint directly so it prepares `/workspace` symlinks:
+
+```bash
+mkdir -p /root/.config/rclone
+# copy or mount rclone.conf to /root/.config/rclone/rclone.conf
+export RCLONE_CONFIG=/root/.config/rclone/rclone.conf
+
+/opt/lipsync/docker/training/entrypoint.sh doctor
+/opt/lipsync/docker/training/entrypoint.sh prepare --skip-existing
+```
+
+Alternative generic-host flow if the machine was rented with another image and
+Docker is available inside the host:
 
 ```bash
 docker run --gpus all --ipc=host --shm-size=32g --rm -it \
