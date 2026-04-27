@@ -133,6 +133,7 @@ def build_sync_alignment_kwargs(cfg: dict) -> dict:
         "sync_alignment_max_shift_mad": sync_cfg.get("max_shift_mad"),
         "sync_alignment_syncnet_checkpoint": sync_cfg.get("syncnet_checkpoint"),
         "sync_alignment_write_manifest": sync_cfg.get("write_manifest", True),
+        "sync_alignment_registry_path": sync_cfg.get("registry_path"),
     }
 
 

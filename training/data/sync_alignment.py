@@ -51,6 +51,7 @@ DEFAULT_SYNCNET_CHECKPOINT = _resolve_existing_path(
 )
 
 SYNC_ALIGNMENT_VERSION = 1
+SYNC_ALIGNMENT_REGISTRY_SCHEMA = "lipsync.sync_alignment_registry.v1"
 DEFAULT_SYNC_ALIGNMENT_GUARD_MEL_TICKS = 10
 DEFAULT_SYNC_ALIGNMENT_SEARCH_MEL_TICKS = 10
 DEFAULT_SYNC_ALIGNMENT_SAMPLES = 0
@@ -356,6 +357,267 @@ def load_sync_alignment(meta: dict | None) -> dict | None:
     if "audio_shift_mel_ticks" not in payload:
         return None
     return payload
+
+
+def sync_alignment_status(meta: dict | None) -> str | None:
+    if not isinstance(meta, dict):
+        return None
+    payload = meta.get("sync_alignment")
+    if not isinstance(payload, dict):
+        return None
+    status = payload.get("status")
+    return str(status) if status is not None else None
+
+
+def is_failed_sync_alignment(meta: dict | None) -> bool:
+    return sync_alignment_status(meta) == "failed"
+
+
+def upsert_raw_sync_alignment(meta: dict, sync_alignment: dict) -> dict:
+    updated = dict(meta or {})
+    updated["sync_alignment"] = dict(sync_alignment)
+    return updated
+
+
+def write_raw_sync_alignment_to_meta_path(
+    meta_path: str,
+    meta: dict,
+    sync_alignment: dict,
+) -> dict:
+    updated = upsert_raw_sync_alignment(meta, sync_alignment)
+    _atomic_write_json(meta_path, updated)
+    return updated
+
+
+def sync_alignment_registry_key(name: str, dataset_kind: str | None = None) -> str:
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        return ""
+    clean_dataset_kind = str(dataset_kind or "").strip().lower()
+    if clean_dataset_kind:
+        return f"{clean_dataset_kind}/{clean_name}"
+    return clean_name
+
+
+def sync_alignment_registry_lookup_keys(name: str, dataset_kind: str | None = None) -> list[str]:
+    keys = []
+    if dataset_kind:
+        keys.append(sync_alignment_registry_key(name, dataset_kind))
+    keys.append(sync_alignment_registry_key(name))
+    return [key for key in keys if key]
+
+
+def _normalize_registry_record(record: dict) -> dict | None:
+    if not isinstance(record, dict):
+        return None
+    sync_alignment = record.get("sync_alignment")
+    if not isinstance(sync_alignment, dict):
+        if record.get("bad") is True:
+            sync_alignment = build_failed_sync_alignment_record(
+                source=str(record.get("source") or "sync_alignment_registry"),
+                reason=str(record.get("reason") or "marked_bad_in_registry"),
+                error=record.get("error"),
+            )
+        elif record.get("status") in {"aligned", "failed"}:
+            sync_alignment = {
+                key: value
+                for key, value in record.items()
+                if key not in {
+                    "schema",
+                    "key",
+                    "name",
+                    "dataset_kind",
+                    "quality_tier",
+                    "bad",
+                    "ts",
+                    "meta_path",
+                }
+            }
+        else:
+            return None
+
+    name = str(record.get("name") or "").strip()
+    dataset_kind = str(record.get("dataset_kind") or "").strip().lower()
+    key = str(record.get("key") or sync_alignment_registry_key(name, dataset_kind)).strip()
+    if not key:
+        return None
+    if "/" in key and (not name or not dataset_kind):
+        key_dataset_kind, key_name = key.split("/", 1)
+        if not dataset_kind:
+            dataset_kind = key_dataset_kind.strip().lower()
+        if not name:
+            name = key_name.strip()
+    normalized = dict(record)
+    normalized["key"] = key
+    if name:
+        normalized["name"] = name
+    if dataset_kind:
+        normalized["dataset_kind"] = dataset_kind
+    normalized["sync_alignment"] = dict(sync_alignment)
+    normalized["bad"] = bool(record.get("bad") is True or sync_alignment.get("status") == "failed")
+    return normalized
+
+
+def _iter_registry_records_from_payload(payload) -> list[dict]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    records = payload.get("records")
+    if isinstance(records, list):
+        return [item for item in records if isinstance(item, dict)]
+    if isinstance(records, dict):
+        result = []
+        for key, item in records.items():
+            if isinstance(item, dict):
+                record = dict(item)
+                record.setdefault("key", str(key))
+                result.append(record)
+        return result
+    if "sync_alignment" in payload or payload.get("bad") is True:
+        return [payload]
+    mapped_records = []
+    for key, item in payload.items():
+        if key in {"schema", "ts"}:
+            continue
+        if isinstance(item, dict):
+            record = dict(item)
+            record.setdefault("key", str(key))
+            mapped_records.append(record)
+    if mapped_records:
+        return mapped_records
+    return []
+
+
+def load_sync_alignment_registry(path: str | os.PathLike | None) -> dict[str, dict]:
+    if not path:
+        return {}
+    path = os.fspath(path)
+    if not os.path.exists(path):
+        return {}
+
+    latest: dict[str, dict] = {}
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    stripped = text.strip()
+    if not stripped:
+        return latest
+
+    if stripped.startswith("[") or stripped.startswith("{"):
+        try:
+            payload = json.loads(stripped)
+            records = _iter_registry_records_from_payload(payload)
+        except json.JSONDecodeError:
+            records = []
+            for line in stripped.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(record, dict):
+                    records.append(record)
+    else:
+        records = []
+        for line in stripped.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+
+    for record in records:
+        normalized = _normalize_registry_record(record)
+        if not normalized:
+            continue
+        latest[normalized["key"]] = normalized
+    return latest
+
+
+def find_sync_alignment_registry_record(
+    registry: dict[str, dict],
+    *,
+    name: str,
+    dataset_kind: str | None = None,
+) -> dict | None:
+    for key in sync_alignment_registry_lookup_keys(name, dataset_kind):
+        record = registry.get(key)
+        if record is not None:
+            return record
+    return None
+
+
+def build_sync_alignment_registry_record(
+    *,
+    name: str,
+    dataset_kind: str | None,
+    quality_tier: str | None,
+    sync_alignment: dict,
+    meta_path: str | None = None,
+) -> dict:
+    key = sync_alignment_registry_key(name, dataset_kind)
+    record = {
+        "schema": SYNC_ALIGNMENT_REGISTRY_SCHEMA,
+        "ts": _timestamp_utc(),
+        "key": key,
+        "name": str(name),
+        "dataset_kind": str(dataset_kind or ""),
+        "quality_tier": str(quality_tier or ""),
+        "bad": bool(sync_alignment.get("status") == "failed"),
+        "sync_alignment": dict(sync_alignment),
+    }
+    if meta_path:
+        record["meta_path"] = str(meta_path)
+    return record
+
+
+def append_sync_alignment_registry_record(
+    path: str | os.PathLike | None,
+    record: dict,
+) -> None:
+    if not path:
+        return
+    path = os.fspath(path)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def write_sync_alignment_registry(
+    path: str | os.PathLike,
+    records: dict[str, dict] | list[dict],
+) -> None:
+    if isinstance(records, dict):
+        items = [records[key] for key in sorted(records)]
+    else:
+        items = sorted(records, key=lambda item: str(item.get("key", "")))
+    parent = os.path.dirname(os.fspath(path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=os.path.basename(os.fspath(path)) + ".",
+        suffix=".tmp",
+        dir=parent or None,
+    )
+    os.close(fd)
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            for item in items:
+                normalized = _normalize_registry_record(item)
+                if normalized:
+                    f.write(json.dumps(normalized, ensure_ascii=False, sort_keys=True) + "\n")
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def _load_official_syncnet_class():

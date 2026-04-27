@@ -12,6 +12,7 @@ import yaml
 
 
 SYNC_ALIGNMENT_DEFAULTS = {
+    "registry_path": "output/sync_alignment/sync_alignment_manifest.jsonl",
     "outlier_trim_ratio": 0.2,
     "min_consensus_ratio": 0.7,
     "max_shift_mad": 1.5,

@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 import subprocess
 import tempfile
 import time
@@ -53,8 +54,14 @@ from .sync_alignment import (
     DEFAULT_SYNC_ALIGNMENT_START_GAP_MULTIPLE,
     build_shifted_frame_aligned_mels,
     compute_sync_alignment_from_faceclip,
+    append_sync_alignment_registry_record,
+    build_sync_alignment_registry_record,
+    find_sync_alignment_registry_record,
+    is_failed_sync_alignment,
+    load_sync_alignment_registry,
     load_sync_alignment,
     upsert_sync_alignment,
+    write_raw_sync_alignment_to_meta_path,
     write_sync_alignment_to_meta_path,
     write_failed_sync_alignment_to_meta_path,
 )
@@ -171,6 +178,7 @@ class LipSyncDataset(Dataset):
         sync_alignment_max_shift_mad=DEFAULT_SYNC_ALIGNMENT_MAX_SHIFT_MAD,
         sync_alignment_syncnet_checkpoint=None,
         sync_alignment_write_manifest=True,
+        sync_alignment_registry_path=None,
     ):
         self.img_size = img_size
         self.mel_step_size = mel_step_size
@@ -225,6 +233,14 @@ class LipSyncDataset(Dataset):
             sync_alignment_syncnet_checkpoint or DEFAULT_SYNCNET_CHECKPOINT
         )
         self.sync_alignment_write_manifest = bool(sync_alignment_write_manifest)
+        self.sync_alignment_registry_path = sync_alignment_registry_path
+        self.sync_alignment_registry = load_sync_alignment_registry(sync_alignment_registry_path)
+        if self.sync_alignment_registry:
+            print(
+                f"[Dataset] Sync alignment registry: loaded "
+                f"{len(self.sync_alignment_registry)} records from {sync_alignment_registry_path}",
+                flush=True,
+            )
 
         if self.audio_cfg:
             self.mel_frames_per_second = (
@@ -472,7 +488,16 @@ class LipSyncDataset(Dataset):
 
             meta_path = os.path.join(speaker_dir, "bbox.json")
             meta = _load_json(meta_path)
+            meta = self._apply_sync_alignment_registry_to_meta(
+                meta,
+                meta_path=meta_path,
+                name=name,
+                root=root,
+            )
             if self.skip_bad_samples and meta.get("bad_sample", False):
+                stats["skipped_bad"] += 1
+                continue
+            if self.skip_bad_samples and is_failed_sync_alignment(meta):
                 stats["skipped_bad"] += 1
                 continue
 
@@ -508,8 +533,19 @@ class LipSyncDataset(Dataset):
                     continue
 
                 meta = _load_json(json_path)
+                meta = self._apply_sync_alignment_registry_to_meta(
+                    meta,
+                    meta_path=json_path,
+                    name=name,
+                    root=root,
+                )
                 if self.skip_bad_samples and meta.get("bad_sample", False):
                     stats["skipped_bad"] += 1
+                    continue
+                if self.skip_bad_samples and is_failed_sync_alignment(meta):
+                    stats["skipped_bad"] += 1
+                    cache_dir = self._lazy_cache_dir(root, mp4_path, name)
+                    self._cleanup_lazy_materialization({"cache_dir": cache_dir})
                     continue
 
                 detections_path = os.path.splitext(mp4_path)[0] + ".detections.json"
@@ -549,11 +585,96 @@ class LipSyncDataset(Dataset):
         digest = hashlib.sha1(os.path.abspath(video_path).encode("utf-8")).hexdigest()[:12]
         return os.path.join(base_root, f"{name}--{digest}")
 
+    @staticmethod
+    def _infer_dataset_kind(root, meta):
+        if isinstance(meta, dict):
+            dataset_kind = str(meta.get("source_dataset") or "").strip().lower()
+            if dataset_kind:
+                return dataset_kind
+        root_text = str(root).lower()
+        if "hdtf" in root_text:
+            return "hdtf"
+        if "talkvid" in root_text:
+            return "talkvid"
+        return ""
+
+    def _apply_sync_alignment_registry_to_meta(self, meta, *, meta_path, name, root):
+        if not self.sync_alignment_registry:
+            return meta
+        dataset_kind = self._infer_dataset_kind(root, meta)
+        record = find_sync_alignment_registry_record(
+            self.sync_alignment_registry,
+            name=name,
+            dataset_kind=dataset_kind,
+        )
+        if not record:
+            return meta
+
+        record_alignment = record.get("sync_alignment")
+        if not isinstance(record_alignment, dict):
+            return meta
+        record_status = record_alignment.get("status")
+        if meta.get("sync_alignment") == record_alignment:
+            return meta
+
+        updated_meta = write_raw_sync_alignment_to_meta_path(
+            meta_path,
+            meta,
+            record_alignment,
+        )
+        print(
+            f"[Dataset] Sync alignment registry: applied {record_status} to {name}",
+            flush=True,
+        )
+        return updated_meta
+
+    def _sync_alignment_registry_record_for_entry(self, entry, meta):
+        if not self.sync_alignment_registry_path:
+            return None
+        if not isinstance(meta, dict):
+            return None
+        sync_alignment = meta.get("sync_alignment")
+        if not isinstance(sync_alignment, dict):
+            return None
+        if sync_alignment.get("status") not in {"aligned", "failed"}:
+            return None
+        return build_sync_alignment_registry_record(
+            name=entry.get("name") or meta.get("name") or os.path.splitext(os.path.basename(entry.get("meta_path", "")))[0],
+            dataset_kind=self._infer_dataset_kind(entry.get("root", ""), meta),
+            quality_tier=meta.get("quality_tier"),
+            sync_alignment=sync_alignment,
+            meta_path=entry.get("meta_path"),
+        )
+
+    def _append_sync_alignment_registry_for_entry(self, entry, meta):
+        record = self._sync_alignment_registry_record_for_entry(entry, meta)
+        if not record:
+            return
+        append_sync_alignment_registry_record(self.sync_alignment_registry_path, record)
+        self.sync_alignment_registry[record["key"]] = record
+
+    @staticmethod
+    def _cleanup_lazy_materialization(entry):
+        cache_dir = entry.get("cache_dir")
+        if cache_dir and os.path.isdir(cache_dir):
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            return
+        for key in ("frames_path", "mel_path"):
+            path = entry.get(key)
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
     def _entry_frame_count(self, entry):
         cached = entry.get("_frame_count")
         if cached is not None:
             return cached
         meta = entry.get("meta") or {}
+        if self.skip_bad_samples and is_failed_sync_alignment(meta):
+            entry["_frame_count"] = 0
+            return 0
         sync_alignment = load_sync_alignment(meta)
         if sync_alignment is not None:
             count = int(sync_alignment.get("valid_frame_count") or 0)
@@ -824,10 +945,10 @@ class LipSyncDataset(Dataset):
             if load_sync_alignment(meta) is None:
                 if (
                     self.skip_bad_samples
-                    and isinstance(sync_alignment, dict)
-                    and sync_alignment.get("status") == "failed"
+                    and is_failed_sync_alignment(meta)
                 ):
                     entry["_frame_count"] = 0
+                    self._cleanup_lazy_materialization(entry)
                     continue
                 missing.append(entry)
 
@@ -860,10 +981,10 @@ class LipSyncDataset(Dataset):
         sync_alignment = meta.get("sync_alignment") if isinstance(meta, dict) else None
         if (
             self.skip_bad_samples
-            and isinstance(sync_alignment, dict)
-            and sync_alignment.get("status") == "failed"
+            and is_failed_sync_alignment(meta)
         ):
             entry["_frame_count"] = 0
+            self._cleanup_lazy_materialization(entry)
             return meta
 
         if entry.get("type") != "lazy":
@@ -877,6 +998,10 @@ class LipSyncDataset(Dataset):
             meta = _load_json(entry["meta_path"])
             entry["meta"] = meta
             if load_sync_alignment(meta) is not None:
+                return meta
+            if self.skip_bad_samples and is_failed_sync_alignment(meta):
+                entry["_frame_count"] = 0
+                self._cleanup_lazy_materialization(entry)
                 return meta
 
             frames = np.load(entry["frames_path"], mmap_mode="r")
@@ -923,6 +1048,8 @@ class LipSyncDataset(Dataset):
                 )
                 entry["meta"] = failed_meta
                 entry["_frame_count"] = 0
+                self._append_sync_alignment_registry_for_entry(entry, failed_meta)
+                self._cleanup_lazy_materialization(entry)
                 return failed_meta
 
             extra = {
@@ -965,6 +1092,8 @@ class LipSyncDataset(Dataset):
                 )
                 entry["meta"] = failed_meta
                 entry["_frame_count"] = 0
+                self._append_sync_alignment_registry_for_entry(entry, failed_meta)
+                self._cleanup_lazy_materialization(entry)
                 return failed_meta
             updated_meta = upsert_sync_alignment(
                 meta,
@@ -1010,6 +1139,7 @@ class LipSyncDataset(Dataset):
             entry["_frame_count"] = int(
                 updated_meta["sync_alignment"].get("valid_frame_count") or 0
             )
+            self._append_sync_alignment_registry_for_entry(entry, updated_meta)
             return updated_meta
         finally:
             self._release_lock(lock_path)
@@ -1126,6 +1256,18 @@ class LipSyncDataset(Dataset):
 
         if self.sync_alignment_enabled and entry["type"] == "lazy":
             self._ensure_entry_sync_alignment(entry)
+
+        meta = self._load_meta(entry)
+        if (
+            self.sync_alignment_enabled
+            and self.skip_bad_samples
+            and is_failed_sync_alignment(meta)
+        ):
+            self._cleanup_lazy_materialization(entry)
+            reason = meta.get("sync_alignment", {}).get("reason", "failed")
+            error = meta.get("sync_alignment", {}).get("error", "")
+            detail = f"{reason}: {error}".strip(": ")
+            raise RuntimeError(f"sync alignment failed for {entry['name']} ({detail})")
 
         if entry["type"] == "lazy":
             self._materialize_lazy_entry(entry)

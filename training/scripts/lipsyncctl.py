@@ -22,6 +22,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TRAINING_ROOT = REPO_ROOT / "training"
 DEFAULT_ARTIFACT_CONFIG = TRAINING_ROOT / "configs" / "runtime_artifacts.yaml"
 DEFAULT_RCLONE_CONFIG = Path("/run/secrets/rclone.conf")
+DEFAULT_DATASET_FOLDER_ID = "1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52"
+DEFAULT_SYNC_ALIGNMENT_REGISTRY_PATH = "output/sync_alignment/sync_alignment_manifest.jsonl"
+DEFAULT_SYNC_ALIGNMENT_REMOTE_NAME = "sync_alignment_manifest.jsonl"
 
 
 def log(message: str) -> None:
@@ -300,7 +303,19 @@ def command_prewarm_cache(args: argparse.Namespace) -> int:
         args.config,
         "--log-every",
         str(args.log_every),
+        "--sync-alignment-registry-path",
+        args.sync_alignment_registry_path,
+        "--sync-alignment-remote",
+        args.sync_alignment_remote,
+        "--sync-alignment-remote-name",
+        args.sync_alignment_remote_name,
     ]
+    if args.sync_alignment_folder_id:
+        cmd.extend(["--sync-alignment-folder-id", args.sync_alignment_folder_id])
+    if args.no_sync_alignment_download:
+        cmd.append("--no-sync-alignment-download")
+    if args.no_sync_alignment_upload:
+        cmd.append("--no-sync-alignment-upload")
     if args.speaker_list:
         cmd.extend(["--speaker-list", args.speaker_list])
     if args.max_items is not None:
@@ -435,7 +450,7 @@ def build_parser() -> argparse.ArgumentParser:
     merge = subparsers.add_parser("merge-dataset", help="Merge processed faceclip archives from Drive")
     add_common_runtime_args(merge)
     merge.add_argument("--remote", default="gdrive:")
-    merge.add_argument("--folder-id", default="1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52")
+    merge.add_argument("--folder-id", default=DEFAULT_DATASET_FOLDER_ID)
     merge.add_argument("--archive-glob", default="*faceclips*.tar")
     merge.add_argument("--max-archives", type=int, default=0)
     merge.add_argument("--manifest-path", default="output/faceclip_merge/merge_manifest.jsonl")
@@ -454,14 +469,26 @@ def build_parser() -> argparse.ArgumentParser:
     prewarm.add_argument("--speaker-list", default=None)
     prewarm.add_argument("--max-items", type=int, default=None)
     prewarm.add_argument("--log-every", type=int, default=100)
+    prewarm.add_argument("--sync-alignment-registry-path", default=DEFAULT_SYNC_ALIGNMENT_REGISTRY_PATH)
+    prewarm.add_argument("--sync-alignment-remote", default="gdrive:")
+    prewarm.add_argument("--sync-alignment-folder-id", default=DEFAULT_DATASET_FOLDER_ID)
+    prewarm.add_argument("--sync-alignment-remote-name", default=DEFAULT_SYNC_ALIGNMENT_REMOTE_NAME)
+    prewarm.add_argument("--no-sync-alignment-download", action="store_true")
+    prewarm.add_argument("--no-sync-alignment-upload", action="store_true")
     prewarm.set_defaults(func=command_prewarm_cache)
 
-    sync_align = subparsers.add_parser("sync-align", help="Alias for prewarm-cache; dataset init computes sync alignment")
+    sync_align = subparsers.add_parser("sync-align", help="Compute/load dataset sync alignment and update the Drive registry")
     add_common_runtime_args(sync_align)
     sync_align.add_argument("--config", default="configs/syncnet_mirror_cuda3090_medium.yaml")
     sync_align.add_argument("--speaker-list", default=None)
     sync_align.add_argument("--max-items", type=int, default=None)
     sync_align.add_argument("--log-every", type=int, default=100)
+    sync_align.add_argument("--sync-alignment-registry-path", default=DEFAULT_SYNC_ALIGNMENT_REGISTRY_PATH)
+    sync_align.add_argument("--sync-alignment-remote", default="gdrive:")
+    sync_align.add_argument("--sync-alignment-folder-id", default=DEFAULT_DATASET_FOLDER_ID)
+    sync_align.add_argument("--sync-alignment-remote-name", default=DEFAULT_SYNC_ALIGNMENT_REMOTE_NAME)
+    sync_align.add_argument("--no-sync-alignment-download", action="store_true")
+    sync_align.add_argument("--no-sync-alignment-upload", action="store_true")
     sync_align.set_defaults(func=command_prewarm_cache)
 
     train_syncnet = subparsers.add_parser("train-syncnet", help="Run SyncNet training")
