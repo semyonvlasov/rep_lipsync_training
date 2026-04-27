@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TRAINING_ROOT = REPO_ROOT / "training"
 DEFAULT_ARTIFACT_CONFIG = TRAINING_ROOT / "configs" / "runtime_artifacts.yaml"
 DEFAULT_RCLONE_CONFIG = Path("/run/secrets/rclone.conf")
-DEFAULT_DATASET_FOLDER_ID = "1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52"
+DEFAULT_DATASET_FOLDER_ID = "1D6vtNpRmZabqnlW4598X6lqgFETZ9RvO"
 DEFAULT_SYNC_ALIGNMENT_REGISTRY_PATH = "output/sync_alignment/sync_alignment_manifest.jsonl"
 DEFAULT_SYNC_ALIGNMENT_REMOTE_NAME = "sync_alignment_manifest.jsonl"
 
