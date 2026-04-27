@@ -331,6 +331,7 @@ def main():
         ffmpeg_bin=cfg["data"].get("ffmpeg_bin", "ffmpeg"),
         materialize_timeout=cfg["data"].get("materialize_timeout", 600),
         materialize_frames_size=cfg["data"].get("materialize_frames_size", cfg["model"]["img_size"]),
+        allow_empty=True,
         **build_sync_alignment_kwargs(cfg, registry_path),
     )
 

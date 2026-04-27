@@ -162,6 +162,7 @@ class LipSyncDataset(Dataset):
         materialize_timeout=600,
         materialize_frames_size=None,
         materialize_min_face_height_ratio=0.95,
+        allow_empty=False,
         sync_alignment_enabled=True,
         sync_alignment_compute_if_missing=True,
         sync_alignment_guard_mel_ticks=DEFAULT_SYNC_ALIGNMENT_GUARD_MEL_TICKS,
@@ -202,6 +203,7 @@ class LipSyncDataset(Dataset):
             1.0,
             max(0.0, float(materialize_min_face_height_ratio)),
         )
+        self.allow_empty = bool(allow_empty)
         self.audio_cfg = dict(audio_cfg or {})
         self._audio_proc = AudioProcessor(self.audio_cfg) if self.audio_cfg else None
         self.sync_alignment_enabled = bool(sync_alignment_enabled and self.audio_cfg)
@@ -339,7 +341,7 @@ class LipSyncDataset(Dataset):
         print(f"[Dataset] Total: {self._total_frames} frames across {len(self.speakers)} samples")
 
         self._cache = OrderedDict()
-        if not self.speakers:
+        if not self.speakers and not self.allow_empty:
             raise RuntimeError("Dataset is empty after filtering")
 
     @staticmethod
