@@ -67,6 +67,10 @@ from .sync_alignment import (
 )
 
 
+TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(TRAINING_ROOT)
+
+
 def _format_cache_value(value):
     if isinstance(value, float):
         if value.is_integer():
@@ -83,6 +87,37 @@ def _load_json(path):
             return json.load(f)
     except Exception:
         return {}
+
+
+def _resolve_repo_relative_path(path):
+    if not path:
+        return path
+    path = os.fspath(path)
+    if os.path.isabs(path):
+        return path
+
+    project_relative_prefixes = (
+        "assets" + os.sep,
+        "models" + os.sep,
+        "training" + os.sep,
+    )
+    if path.startswith(project_relative_prefixes):
+        candidates = [
+            os.path.join(PROJECT_ROOT, path),
+            os.path.join(TRAINING_ROOT, path),
+            path,
+        ]
+    else:
+        candidates = [
+            os.path.join(TRAINING_ROOT, path),
+            os.path.join(PROJECT_ROOT, path),
+            path,
+        ]
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return candidates[0]
 
 
 def _format_sync_alignment_progress(meta):
@@ -231,7 +266,7 @@ class LipSyncDataset(Dataset):
             if sync_alignment_max_shift_mad is None
             else float(sync_alignment_max_shift_mad)
         )
-        self.sync_alignment_syncnet_checkpoint = (
+        self.sync_alignment_syncnet_checkpoint = _resolve_repo_relative_path(
             sync_alignment_syncnet_checkpoint or DEFAULT_SYNCNET_CHECKPOINT
         )
         self.sync_alignment_write_manifest = bool(sync_alignment_write_manifest)
@@ -992,6 +1027,15 @@ class LipSyncDataset(Dataset):
         if entry.get("type") != "lazy":
             return meta
 
+        if (
+            not self.sync_alignment_syncnet_checkpoint
+            or not os.path.exists(self.sync_alignment_syncnet_checkpoint)
+        ):
+            raise FileNotFoundError(
+                "Sync alignment checkpoint not found: "
+                f"{self.sync_alignment_syncnet_checkpoint}"
+            )
+
         self._materialize_lazy_entry(entry)
 
         lock_path = self._lock_path(entry["meta_path"] + ".sync")
@@ -1032,6 +1076,8 @@ class LipSyncDataset(Dataset):
                     min_consensus_ratio=self.sync_alignment_min_consensus_ratio,
                     max_shift_mad=self.sync_alignment_max_shift_mad,
                 )
+            except FileNotFoundError:
+                raise
             except Exception as exc:
                 if not self.skip_bad_samples:
                     raise
