@@ -25,6 +25,7 @@ from data import LipSyncDataset
 from data.sync_alignment import (
     is_failed_sync_alignment,
     load_sync_alignment_registry,
+    write_failed_sync_alignment_to_meta_path,
     write_sync_alignment_registry,
 )
 from config_loader import load_config
@@ -39,6 +40,72 @@ def load_json(path):
             return json.load(f)
     except Exception:
         return {}
+
+
+def frame_count_from_meta(meta):
+    for key in ("valid_frame_count", "length_frames", "n_frames", "frames"):
+        value = meta.get(key)
+        if value is not None:
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                pass
+    if meta.get("start_frame") is not None and meta.get("end_frame") is not None:
+        try:
+            return max(0, int(meta["end_frame"]) - int(meta["start_frame"]))
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def materialization_failure_reason(exc):
+    if isinstance(exc, subprocess.CalledProcessError):
+        cmd = exc.cmd if isinstance(exc.cmd, (list, tuple)) else []
+        executable = os.path.basename(str(cmd[0])) if cmd else ""
+        if executable == "ffmpeg":
+            return "materialize_ffmpeg_failed"
+    text = str(exc)
+    if "No frames decoded" in text:
+        return "materialize_no_frames"
+    if "Could not open video" in text:
+        return "materialize_video_open_failed"
+    return None
+
+
+def exception_detail(exc):
+    if isinstance(exc, subprocess.CalledProcessError):
+        parts = [f"command returned rc={exc.returncode}"]
+        stderr = (exc.stderr or "").strip()
+        stdout = (exc.stdout or "").strip()
+        if stderr:
+            parts.append(f"stderr={stderr[-2000:]}")
+        if stdout:
+            parts.append(f"stdout={stdout[-2000:]}")
+        return "; ".join(parts)
+    return str(exc)
+
+
+def mark_entry_materialization_failed(helper, entry, exc, reason):
+    meta = load_json(entry["meta_path"])
+    n_frames = frame_count_from_meta(meta)
+    fps = float(meta.get("fps", helper.fps) or helper.fps)
+    failed_meta = write_failed_sync_alignment_to_meta_path(
+        entry["meta_path"],
+        meta,
+        n_frames=n_frames,
+        fps=fps,
+        mel_frames_per_second=helper.mel_frames_per_second,
+        mel_step_size=helper.mel_step_size,
+        search_guard_mel_ticks=helper.sync_alignment_guard_mel_ticks,
+        source="prewarm_cache",
+        reason=reason,
+        error=exception_detail(exc),
+    )
+    entry["meta"] = failed_meta
+    entry["_frame_count"] = 0
+    helper._append_sync_alignment_registry_for_entry(entry, failed_meta)
+    helper._cleanup_lazy_materialization(entry)
+    return failed_meta
 
 
 def load_allowlist(path):
@@ -380,6 +447,11 @@ def main():
                     continue
             helper._materialize_lazy_entry(entry)
         except Exception as exc:
+            reason = materialization_failure_reason(exc)
+            if helper.skip_bad_samples and reason:
+                mark_entry_materialization_failed(helper, entry, exc, reason)
+                sync_bad += 1
+                continue
             failures += 1
             log(f"ERROR {idx}/{len(entries)} {entry['name']}: {exc}")
 
