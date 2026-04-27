@@ -1,0 +1,103 @@
+# Runtime artifacts used by the Docker/Vast deployment flow.
+#
+# Public Docker images must not bake private checkpoints. `lipsyncctl prepare`
+# should use this registry with rclone-mounted credentials to fetch runtime
+# weights into the target paths below.
+
+version: 1
+remote: "gdrive:"
+
+runtime_roots:
+  repo: "/opt/lipsync"
+  workspace: "/workspace"
+  rclone_config: "/run/secrets/rclone.conf"
+
+official_checkpoints:
+  syncnet:
+    description: "Official Wav2Lip SyncNet teacher"
+    drive_file_id: "1_RUm6ncXDX2e_Qoyj24Yrvr6CGaBtPY4"
+    filename: "lipsync_expert.pth"
+    target_path: "models/official_syncnet/checkpoints/lipsync_expert.pth"
+    sha256: "9b9936c721696446eeed353032cab242a8cf0eed8c46cde540366f6ae5493be5"
+    size_bytes: 197357631
+
+  wav2lip_gan:
+    description: "Official Wav2Lip GAN generator checkpoint used by default"
+    drive_file_id: "1pR9J1u4FLU_sOXXJ_78wt3NxVMOaNXq-"
+    filename: "wav2lip_gan.pth"
+    target_path: "models/wav2lip/checkpoints/wav2lip_gan.pth"
+    prepare_default: true
+    sha256: "180cfd49d31d47f195d5bfc62830ffe2c40724b7bbbce6faadc73ac6ab1a3b8e"
+    size_bytes: 145829145
+
+  wav2lip_nogan:
+    description: "Official Wav2Lip non-GAN generator checkpoint, kept for optional comparisons"
+    drive_file_id: "1kBvPwphfQG0XkvmV0Q8SyJQTORm0p4po"
+    filename: "wav2lip.pth"
+    target_path: "models/wav2lip/checkpoints/wav2lip.pth"
+    prepare_default: false
+    sha256: "7ab9249147fd8d7884983567883222b7a86b6f94282354887825dfee7d608999"
+    size_bytes: 145837271
+
+current_best_checkpoints:
+  syncnet:
+    description: "Current best SyncNet selected for sync-alignment and teacher baselines"
+    drive_file_id: "19nrbYN5fn6UQIzdU2NUcwTfrhsPuAvoa"
+    filename: "syncnet_best_off_eval.pth"
+    target_path: "training/output/syncnet_current_best_20260406/syncnet_best_off_eval.pth"
+    sha256: "a2d2267636f3cee00e0d579449059eeb76beb6ac03427c0d4a037941c4772ef0"
+    size_bytes: 197466831
+
+  gan_generator:
+    description: "Current best x96 mirror GAN generator from step 66000"
+    drive_file_id: "1l_JP0NzaWWfWGypHN5LCkpI7qLr66W01"
+    filename: "generator_step000066000.pth"
+    target_path: "training/output/current_best_gan_20260414/generator_step000066000.pth"
+    source_run: "generator_mirror_gan_fresh_currentbest_adaptive_20260408"
+    source_step: 66000
+    sha256: "1baa3d5ff8b1fc173b6eaafafebd30ecf2dc243e760703cf1eca3b7cd7c12c0e"
+    size_bytes: 72759775
+
+  gan_discriminator:
+    description: "Paired discriminator for the current best x96 mirror GAN generator"
+    drive_file_id: "175nOnRuBkUM3-_59cSw8T0s-Nxv3dia3"
+    filename: "disc_step000066000.pth"
+    target_path: "training/output/current_best_gan_20260414/disc_step000066000.pth"
+    source_run: "generator_mirror_gan_fresh_currentbest_adaptive_20260408"
+    source_step: 66000
+    sha256: "5a1cb6b3db103a1f5d2db4fa073af2c93231cc032dc1ffc3f92719f9d6f0e2a0"
+    size_bytes: 28238149
+
+  gan_source_manifest:
+    description: "Source checkpoint manifest for the current best x96 mirror GAN bundle"
+    drive_file_id: "1BRXQLrQqstcd3f3DZMdMvnwXvHRoUC7b"
+    filename: "source_checkpoint_manifest_step000066000.json"
+    target_path: "training/output/current_best_gan_20260414/source_checkpoint_manifest_step000066000.json"
+
+  gan_summary:
+    description: "Human-readable current-best GAN selection summary"
+    drive_file_id: "16h_b8yk5bh1W2xamFrhiqLQD_ySjAgB1"
+    filename: "current_best_summary_20260414.json"
+    target_path: "training/output/current_best_gan_20260414/current_best_summary_20260414.json"
+
+bundled_assets:
+  benchmark_audio:
+    path: "assets/benchmark/short_4s.mp3"
+    install_path: "training/output/benchmark_samples/short_4s.mp3"
+    sha256: "0876841b1aff7c2e2f924c33d9503d56d172cd04aa9afebefd8c068c7b6c1929"
+    size_bytes: 16460
+
+  benchmark_faces:
+    - path: "assets/benchmark/portrait_avatar.mp4"
+      install_path: "training/output/benchmark_samples/portrait_avatar.mp4"
+      sha256: "2b7a25332625e13e37de98cbd70e020e0fa8b5938b063506489d0704c1204871"
+      size_bytes: 938032
+    - path: "assets/benchmark/portrait_rama.mp4"
+      install_path: "training/output/benchmark_samples/portrait_rama.mp4"
+      sha256: "337753794cdd3702765a358ba8306f5d99e23f275906a0fe0f547b694ec3196c"
+      size_bytes: 1166151
+
+  face_landmarker:
+    path: "models/face_processing/face_landmarker_v2_with_blendshapes.task"
+    sha256: "64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff"
+    size_bytes: 3758596

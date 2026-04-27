@@ -2,12 +2,23 @@
 .DS_Store
 .venv
 .venv-*
+.venvs
 __pycache__
 *.pyc
 
 data/
-training/data/
 training/output/
 training/snapshots/
+training/data/_imports/
+training/data/_lazy_cache*/
+training/data/hdtf/
+training/data/talkvid/
+training/data/talkvid_local/
+training/data/talkvid_remote/
+training/data/faceclip_local/
+models/official_syncnet/checkpoints/*.pth
+models/official_syncnet/checkpoints/*.pt
+models/wav2lip/checkpoints/*.pth
+models/wav2lip/checkpoints/*.pt
 
 docs/handoffs/
