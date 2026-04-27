@@ -61,3 +61,14 @@ lipsyncctl benchmark --device cuda
 Private/current-best checkpoints are intentionally downloaded at runtime by
 `lipsyncctl prepare` through `rclone backend copyid`; they are not baked into
 the public DockerHub image.
+
+Troubleshooting:
+
+If `prepare` fails with `command "copyid" failed: command not found`, the
+container has an old apt-packaged rclone. Pull the latest image or update rclone
+inside the current instance before rerunning `prepare`:
+
+```bash
+curl https://rclone.org/install.sh | bash
+rclone backend help gdrive: | grep copyid
+```

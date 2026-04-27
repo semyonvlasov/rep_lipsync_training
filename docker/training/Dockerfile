@@ -5,6 +5,7 @@ ARG TORCH_VERSION=2.10.0
 ARG TORCHVISION_VERSION=0.25.0
 ARG TORCHAUDIO_VERSION=2.10.0
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+ARG RCLONE_VERSION=1.73.3
 
 ENV LIPSYNC_REPO_ROOT=/opt/lipsync \
     PYTHONUNBUFFERED=1 \
@@ -27,9 +28,17 @@ RUN apt-get update \
         python3 \
         python3-pip \
         python3-venv \
-        rclone \
         rsync \
+        unzip \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL \
+        "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip" \
+        -o /tmp/rclone.zip \
+    && unzip -q /tmp/rclone.zip -d /tmp \
+    && install -m 0755 "/tmp/rclone-v${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone \
+    && rm -rf /tmp/rclone.zip "/tmp/rclone-v${RCLONE_VERSION}-linux-amd64" \
+    && rclone version
 
 WORKDIR /tmp/bootstrap
 COPY training/requirements-server.txt /tmp/bootstrap/requirements-server.txt
