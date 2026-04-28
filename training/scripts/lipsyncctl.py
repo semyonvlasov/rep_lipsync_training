@@ -465,7 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     prewarm = subparsers.add_parser("prewarm-cache", help="Materialize lazy frames/mels and sync-alignment cache")
     add_common_runtime_args(prewarm)
-    prewarm.add_argument("--config", default="configs/syncnet_mirror_cuda3090_medium.yaml")
+    prewarm.add_argument("--config", default="configs/syncnet_mirror_batch32.yaml")
     prewarm.add_argument("--speaker-list", default=None)
     prewarm.add_argument("--max-items", type=int, default=None)
     prewarm.add_argument("--log-every", type=int, default=100)
@@ -479,7 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sync_align = subparsers.add_parser("sync-align", help="Compute/load dataset sync alignment and update the Drive registry")
     add_common_runtime_args(sync_align)
-    sync_align.add_argument("--config", default="configs/syncnet_mirror_cuda3090_medium.yaml")
+    sync_align.add_argument("--config", default="configs/syncnet_mirror_batch32.yaml")
     sync_align.add_argument("--speaker-list", default=None)
     sync_align.add_argument("--max-items", type=int, default=None)
     sync_align.add_argument("--log-every", type=int, default=100)
@@ -493,7 +493,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     train_syncnet = subparsers.add_parser("train-syncnet", help="Run SyncNet training")
     add_common_runtime_args(train_syncnet)
-    train_syncnet.add_argument("--config", default="configs/syncnet_mirror_cuda3090_medium.yaml")
+    train_syncnet.add_argument("--config", default="configs/syncnet_mirror_batch32.yaml")
     train_syncnet.add_argument("--resume", default=None)
     train_syncnet.add_argument("--speaker-list", default=None)
     train_syncnet.add_argument("--val-speaker-list", default=None)
