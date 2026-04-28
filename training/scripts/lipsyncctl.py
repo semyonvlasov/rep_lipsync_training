@@ -510,7 +510,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_gan = subparsers.add_parser("train-generator-gan", help="Run mirror official-HQ GAN generator training")
     add_common_runtime_args(train_gan)
     train_gan.add_argument("--config", default="configs/generator_mirror_gan_hdtf_talkvid.yaml")
-    train_gan.add_argument("--syncnet", default="output/syncnet_current_best_20260406/syncnet_best_off_eval.pth")
+    train_gan.add_argument("--syncnet", default="output/syncnet_current_best_20260428/syncnet_best_our_eval.pth")
     train_gan.add_argument("--resume", default=None)
     train_gan.add_argument("--disc-resume", default=None)
     train_gan.add_argument("--speaker-list", default=None)

@@ -119,7 +119,7 @@ data:
   materialize_frames_size: 96
   lazy_cache_root: null
   sync_alignment:
-    syncnet_checkpoint: output/syncnet_current_best_20260406/syncnet_best_off_eval.pth
+    syncnet_checkpoint: output/syncnet_current_best_20260428/syncnet_best_our_eval.pth
 
 training:
   device: cuda

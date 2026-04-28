@@ -41,12 +41,24 @@ official_checkpoints:
 
 current_best_checkpoints:
   syncnet:
-    description: "Current best SyncNet selected for sync-alignment and teacher baselines"
-    drive_file_id: "19nrbYN5fn6UQIzdU2NUcwTfrhsPuAvoa"
-    filename: "syncnet_best_off_eval.pth"
-    target_path: "training/output/syncnet_current_best_20260406/syncnet_best_off_eval.pth"
-    sha256: "a2d2267636f3cee00e0d579449059eeb76beb6ac03427c0d4a037941c4772ef0"
-    size_bytes: 197466831
+    description: "Current best SyncNet selected for generator teacher use and baseline comparisons"
+    drive_file_id: "1zbywhUsFUrCxKXiWFzzvH3JNP9rqpH-T"
+    filename: "syncnet_best_our_eval.pth"
+    target_path: "training/output/syncnet_current_best_20260428/syncnet_best_our_eval.pth"
+    source_run: "training_syncnet_mirror_batch32"
+    source_step: 720000
+    sha256: "2260d11272edc7bef9ae686f874cfdd933e371f70b6725a6c5c25c5a15d9d06a"
+    size_bytes: 197471407
+
+  syncnet_metadata:
+    description: "Metadata for the current best SyncNet checkpoint"
+    drive_file_id: "1Y6GlwkCGh3eSEsj4UmwYHRNn_JyTnQPn"
+    filename: "syncnet_best_our_eval_metadata.json"
+    target_path: "training/output/syncnet_current_best_20260428/syncnet_best_our_eval_metadata.json"
+    source_run: "training_syncnet_mirror_batch32"
+    source_step: 720000
+    sha256: "5b641a126ce5418525b3d18e907fee9845dc0eb1d1433287495426f9c6d804d6"
+    size_bytes: 1794
 
   gan_generator:
     description: "Current best x96 mirror GAN generator from step 66000"
