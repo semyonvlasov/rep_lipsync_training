@@ -19,11 +19,13 @@ Vast search query, not filtered only after the first result page.
 python3 training/scripts/search_vast_offers.py \
   --storage-gb 800 \
   --min-days 7 \
+  --min-cuda 12.8 \
   --limit 20 \
   --extra-query 'gpu_name in [RTX_3090,RTX_4090]'
 
 python3 training/scripts/search_vast_offers.py \
   --storage-gb 800 \
+  --min-cuda 12.8 \
   --eu-only \
   --extra-query 'gpu_name in [RTX_3090,RTX_4090]'
 ```

@@ -124,7 +124,9 @@ purpose. They should be reviewed one by one before being added:
   Lists cheap reliable Vast AI offers with base GPU price, storage price, and
   total hourly price split out. By default it searches all hosts; pass
   `--eu-only` to restrict to the built-in Europe allowlist, or repeat
-  `--country DE --country NL` for an explicit country allowlist.
+  `--country DE --country NL` for an explicit country allowlist. For the
+  `cuda12.8` training image, pass `--min-cuda 12.8` so host drivers satisfy
+  the container runtime requirement.
 - `make bench-lipsync`
   Runs the canonical benchmark path with:
   `face_processing framedata -> fixed median face crop -> x96 generator -> face_framedata restore`.

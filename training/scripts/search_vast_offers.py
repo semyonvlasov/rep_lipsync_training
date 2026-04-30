@@ -85,7 +85,7 @@ def run_vast_search(args: argparse.Namespace) -> list[dict[str, Any]]:
     if args.min_gpu_ram_gb is not None:
         query_parts.append(f"gpu_ram>={args.min_gpu_ram_gb}")
     if args.min_cuda is not None:
-        query_parts.append(f"cuda_vers>={args.min_cuda}")
+        query_parts.append(f"cuda_max_good>={args.min_cuda}")
     for extra in args.extra_query:
         extra = extra.strip()
         if extra:
@@ -251,6 +251,7 @@ def print_table(rows: list[dict[str, Any]], storage_gb: float) -> None:
         f"{storage_gb:g}GB/hr",
         "total/hr",
         "net up/down",
+        "cuda",
         "driver",
     ]
     table: list[list[str]] = [headers]
@@ -270,6 +271,7 @@ def print_table(rows: list[dict[str, Any]], storage_gb: float) -> None:
                 fmt_money(row["_price_storage"]),
                 fmt_money(row["_price_total"]),
                 f"{fmt_float(number(row.get('inet_up')), 0)}/{fmt_float(number(row.get('inet_down')), 0)}",
+                fmt_float(number(row.get("cuda_max_good"), number(row.get("cuda_vers"))), 1),
                 str(row.get("driver_version") or "-"),
             ]
         )
