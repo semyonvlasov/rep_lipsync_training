@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_FACE_LANDMARKER_NAME = "face_landmarker_v2_with_blendshapes.task"
 IMG_SIZE = 96
 PREPARE_BITRATE = "4M"
+PREPARED_CACHE_VERSION = 1
 LOGGER = logging.getLogger("lipsync_benchmark")
 
 if Path("/usr/bin/ffmpeg").exists():
@@ -62,11 +63,14 @@ from face_framedata.restore import restore_video
 from face_processing.config import PipelineConfig
 from lipsync_benchmark_common import (
     default_cache_root,
+    file_sha256,
     get_mel_chunks_cached,
     load_frames_cached,
     load_model,
     prepare_custom_batch,
     resolve_device,
+    save_json,
+    stable_hash,
 )
 
 
@@ -321,6 +325,130 @@ def build_benchmark_config(
     return cfg
 
 
+def prepared_cache_payload(
+    *,
+    face_hash: str | None,
+    audio_hash: str | None,
+    landmarker_hash: str | None,
+    fps: float,
+    mel_count: int,
+    sequence_mode: str,
+    static: bool,
+    resize_factor: int,
+    roi_top_ratio: float | None,
+    roi_bottom_ratio: float | None,
+    landmarker_use_gpu: bool,
+) -> dict:
+    return {
+        "kind": "prepared",
+        "version": PREPARED_CACHE_VERSION,
+        "face_hash": face_hash,
+        "audio_hash": audio_hash,
+        "landmarker_hash": landmarker_hash,
+        "fps": float(fps),
+        "normalized_fps": max(1, int(round(fps))),
+        "mel_count": int(mel_count),
+        "sequence_mode": sequence_mode,
+        "static": bool(static),
+        "resize_factor": int(resize_factor),
+        "roi_top_ratio": roi_top_ratio,
+        "roi_bottom_ratio": roi_bottom_ratio,
+        "landmarker_use_gpu": bool(landmarker_use_gpu),
+        "img_size": IMG_SIZE,
+        "prepare_bitrate": PREPARE_BITRATE,
+        "face_processing_import_root": str(FACE_PROCESSING_IMPORT_ROOT or "installed package"),
+    }
+
+
+def prepared_cache_paths(cache_root: Path, payload: dict) -> dict[str, Path]:
+    cache_key = stable_hash(payload)
+    cache_dir = cache_root / "prepared" / cache_key
+    return {
+        "dir": cache_dir,
+        "prepared_video": cache_dir / "prepared_source.mp4",
+        "framedata": cache_dir / "framedata.json",
+        "normalized": cache_dir / "normalized.mp4",
+        "faceframes": cache_dir / f"faceframes_s{IMG_SIZE}.npy",
+        "meta": cache_dir / "meta.json",
+    }
+
+
+def load_prepared_cache(paths: dict[str, Path], expected_frames: int) -> dict | None:
+    required = ("prepared_video", "framedata", "normalized", "faceframes", "meta")
+    if not all(paths[name].exists() for name in required):
+        return None
+    try:
+        validate_framedata(paths["framedata"], expected_frames)
+        face_crops = np.load(paths["faceframes"], allow_pickle=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[cache] prepared invalid, rebuilding: {paths['dir']} ({exc})", flush=True)
+        return None
+    if int(face_crops.shape[0]) != int(expected_frames):
+        print(
+            "[cache] prepared invalid, rebuilding: "
+            f"{paths['dir']} faceframes={face_crops.shape[0]} expected={expected_frames}",
+            flush=True,
+        )
+        return None
+    print(f"[cache] prepared hit: {paths['dir']}", flush=True)
+    return {
+        "prepared_video": paths["prepared_video"],
+        "framedata": paths["framedata"],
+        "normalized": paths["normalized"],
+        "faceframes": paths["faceframes"],
+        "face_crops": list(face_crops),
+    }
+
+
+def store_prepared_cache(
+    paths: dict[str, Path],
+    *,
+    payload: dict,
+    prepared_video_path: Path,
+    framedata_path: Path,
+    normalized_path: Path,
+    face_crops: list[np.ndarray],
+) -> dict:
+    cache_dir = paths["dir"]
+    tmp_dir = cache_dir.with_name(f"{cache_dir.name}.tmp-{os.getpid()}")
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_paths = {
+        "prepared_video": tmp_dir / paths["prepared_video"].name,
+        "framedata": tmp_dir / paths["framedata"].name,
+        "normalized": tmp_dir / paths["normalized"].name,
+        "faceframes": tmp_dir / paths["faceframes"].name,
+        "meta": tmp_dir / paths["meta"].name,
+    }
+    shutil.copy2(prepared_video_path, tmp_paths["prepared_video"])
+    shutil.copy2(framedata_path, tmp_paths["framedata"])
+    shutil.copy2(normalized_path, tmp_paths["normalized"])
+    np.save(tmp_paths["faceframes"], np.asarray(face_crops, dtype=np.uint8), allow_pickle=False)
+    save_json(
+        tmp_paths["meta"],
+        {
+            **payload,
+            "frame_count": int(len(face_crops)),
+            "prepared_video": tmp_paths["prepared_video"].name,
+            "framedata": tmp_paths["framedata"].name,
+            "normalized": tmp_paths["normalized"].name,
+            "faceframes": tmp_paths["faceframes"].name,
+        },
+    )
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+    tmp_dir.rename(cache_dir)
+    print(f"[cache] prepared store: {cache_dir}", flush=True)
+    return {
+        "prepared_video": paths["prepared_video"],
+        "framedata": paths["framedata"],
+        "normalized": paths["normalized"],
+        "faceframes": paths["faceframes"],
+        "face_crops": face_crops,
+    }
+
+
 def mux_audio(video_path: Path, audio_path: Path, output_path: Path) -> None:
     cmd = [
         resolve_ffmpeg_bin(),
@@ -390,14 +518,14 @@ def main():
 
     is_image = is_image_path(args.face)
     static = bool(args.static or is_image)
-    (frames, video_fps), _ = load_frames_cached(args.face, args.resize_factor, cache_root)
+    (frames, video_fps), face_hash = load_frames_cached(args.face, args.resize_factor, cache_root)
     fps = float(video_fps or args.fps)
 
     model, model_meta = load_model(args.checkpoint, device=device)
     if int(model_meta["img_size"]) != IMG_SIZE:
         raise RuntimeError(f"run_lipsync_benchmark expects img_size={IMG_SIZE}, got {model_meta['img_size']}")
 
-    mel_chunks, _ = get_mel_chunks_cached(
+    mel_chunks, audio_hash = get_mel_chunks_cached(
         args.audio,
         fps,
         audio_cfg=model_meta["audio_cfg"],
@@ -411,6 +539,24 @@ def main():
         flush=True,
     )
 
+    prepared_paths = None
+    prepared_payload = None
+    if cache_root is not None:
+        prepared_payload = prepared_cache_payload(
+            face_hash=face_hash,
+            audio_hash=audio_hash,
+            landmarker_hash=file_sha256(landmarker_path),
+            fps=fps,
+            mel_count=len(mel_chunks),
+            sequence_mode=sequence_mode,
+            static=static,
+            resize_factor=args.resize_factor,
+            roi_top_ratio=args.roi_top,
+            roi_bottom_ratio=args.roi_bottom,
+            landmarker_use_gpu=landmarker_use_gpu,
+        )
+        prepared_paths = prepared_cache_paths(cache_root, prepared_payload)
+
     with tempfile.TemporaryDirectory(prefix="lipsync_benchmark_") as temp_dir:
         work_dir = Path(temp_dir)
         prepared_video_path = work_dir / "prepared_source.mp4"
@@ -419,7 +565,6 @@ def main():
         generated_face_path = work_dir / "generated_face96.mp4"
         restored_noaudio_path = work_dir / "restored_noaudio.mp4"
 
-        write_video(prepared_video_path, prepared_frames, fps)
         cfg = build_benchmark_config(
             landmarker_path,
             landmarker_use_gpu,
@@ -428,39 +573,67 @@ def main():
             roi_top_ratio=args.roi_top,
             roi_bottom_ratio=args.roi_bottom,
         )
-
-        t_analysis = time.time()
-        report = process_video_framedata(str(prepared_video_path), cfg)
-        source_name = prepared_video_path.stem
-        source_dir = framedata_root / source_name
-        framedata_path = source_dir / f"{source_name}_framedata.json"
-        normalized_path = source_dir / "normalized.mp4"
-        validate_framedata(framedata_path, len(prepared_frames))
-        print(
-            f"[framedata] analyzed {report['total_frames']} frames in {time.time() - t_analysis:.1f}s",
-            flush=True,
+        prepared_artifacts = (
+            load_prepared_cache(prepared_paths, len(prepared_frames))
+            if prepared_paths is not None
+            else None
         )
+        if prepared_artifacts is None:
+            write_video(prepared_video_path, prepared_frames, fps)
 
-        t_cut = time.time()
-        cut_face_video(
-            framedata_path=str(framedata_path),
-            video_path=str(normalized_path),
-            output_path=str(face_video_path),
-            output_size=IMG_SIZE,
-            fps=max(1, int(round(fps))),
-            ffmpeg_bin=cfg.normalization.ffmpeg_bin,
-            ffmpeg_timeout=cfg.normalization.ffmpeg_timeout,
-        )
-        face_crops = read_video_frames(face_video_path)
-        if len(face_crops) != len(prepared_frames):
-            raise RuntimeError(
-                f"Extracted face frame count mismatch: {len(face_crops)} vs {len(prepared_frames)}"
+            t_analysis = time.time()
+            report = process_video_framedata(str(prepared_video_path), cfg)
+            source_name = prepared_video_path.stem
+            source_dir = framedata_root / source_name
+            framedata_path = source_dir / f"{source_name}_framedata.json"
+            normalized_path = source_dir / "normalized.mp4"
+            validate_framedata(framedata_path, len(prepared_frames))
+            print(
+                f"[framedata] analyzed {report['total_frames']} frames in {time.time() - t_analysis:.1f}s",
+                flush=True,
             )
+
+            t_cut = time.time()
+            cut_face_video(
+                framedata_path=str(framedata_path),
+                video_path=str(normalized_path),
+                output_path=str(face_video_path),
+                output_size=IMG_SIZE,
+                fps=max(1, int(round(fps))),
+                ffmpeg_bin=cfg.normalization.ffmpeg_bin,
+                ffmpeg_timeout=cfg.normalization.ffmpeg_timeout,
+            )
+            face_crops = read_video_frames(face_video_path)
+            if len(face_crops) != len(prepared_frames):
+                raise RuntimeError(
+                    f"Extracted face frame count mismatch: {len(face_crops)} vs {len(prepared_frames)}"
+                )
+            print(
+                f"[cut] exported {len(face_crops)} x96 faceclip frames in {time.time() - t_cut:.1f}s",
+                flush=True,
+            )
+            if prepared_paths is not None and prepared_payload is not None:
+                prepared_artifacts = store_prepared_cache(
+                    prepared_paths,
+                    payload=prepared_payload,
+                    prepared_video_path=prepared_video_path,
+                    framedata_path=framedata_path,
+                    normalized_path=normalized_path,
+                    face_crops=face_crops,
+                )
+            else:
+                prepared_artifacts = {
+                    "prepared_video": prepared_video_path,
+                    "framedata": framedata_path,
+                    "normalized": normalized_path,
+                    "faceframes": face_video_path,
+                    "face_crops": face_crops,
+                }
+
+        framedata_path = prepared_artifacts["framedata"]
+        normalized_path = prepared_artifacts["normalized"]
+        face_crops = prepared_artifacts["face_crops"]
         dump_face_crops_png(face_crops, args.dump_face_dir)
-        print(
-            f"[cut] exported {len(face_crops)} x96 faceclip frames in {time.time() - t_cut:.1f}s",
-            flush=True,
-        )
 
         predicted_patches: list[np.ndarray] = []
         t_inf = time.time()
@@ -529,10 +702,11 @@ def main():
         if args.keep_intermediates:
             copy_debug_artifacts(
                 {
-                    "prepared_video": prepared_video_path,
+                    "prepared_video": prepared_artifacts["prepared_video"],
                     "framedata": framedata_path,
                     "normalized": normalized_path,
                     "face_video": face_video_path,
+                    "faceframes": prepared_artifacts["faceframes"],
                     "generated_face": generated_face_path,
                     "restored_noaudio": restored_noaudio_path,
                 },
