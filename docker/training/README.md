@@ -16,13 +16,13 @@ when a Europe-only shortlist is needed. `--extra-query` is passed into the
 Vast search query, not filtered only after the first result page.
 
 ```bash
-python3 training/scripts/search_vast_eu_offers.py \
+python3 training/scripts/search_vast_offers.py \
   --storage-gb 800 \
   --min-days 7 \
   --limit 20 \
   --extra-query 'gpu_name in [RTX_3090,RTX_4090]'
 
-python3 training/scripts/search_vast_eu_offers.py \
+python3 training/scripts/search_vast_offers.py \
   --storage-gb 800 \
   --eu-only \
   --extra-query 'gpu_name in [RTX_3090,RTX_4090]'

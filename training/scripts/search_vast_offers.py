@@ -3,9 +3,9 @@
 List cheap reliable Vast AI offers for training.
 
 Example:
-  python3 training/scripts/search_vast_eu_offers.py --storage-gb 800 --limit 20
-  python3 training/scripts/search_vast_eu_offers.py --storage-gb 800 --eu-only
-  python3 training/scripts/search_vast_eu_offers.py --storage-gb 800 --country DE --country NL
+  python3 training/scripts/search_vast_offers.py --storage-gb 800 --limit 20
+  python3 training/scripts/search_vast_offers.py --storage-gb 800 --eu-only
+  python3 training/scripts/search_vast_offers.py --storage-gb 800 --country DE --country NL
 
 The script asks Vast to price the requested local storage amount, then prints
 base GPU price, storage price, and total hourly price separately.

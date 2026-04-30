@@ -120,7 +120,7 @@ purpose. They should be reviewed one by one before being added:
   CPU, RAM, GPU, VRAM, power, temperature, and RX/TX throughput. Intended to
   be started immediately after provisioning a fresh remote box and left running
   during training.
-- `python3 training/scripts/search_vast_eu_offers.py`
+- `python3 training/scripts/search_vast_offers.py`
   Lists cheap reliable Vast AI offers with base GPU price, storage price, and
   total hourly price split out. By default it searches all hosts; pass
   `--eu-only` to restrict to the built-in Europe allowlist, or repeat
