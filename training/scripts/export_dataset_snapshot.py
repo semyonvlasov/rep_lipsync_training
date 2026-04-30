@@ -127,7 +127,10 @@ def lazy_cache_dir(root: Path, mp4_path: Path, name: str, cfg: dict) -> Path:
         base_root = resolve_training_path(cache_root)
     else:
         base_root = root / "_lazy_cache"
-    digest = hashlib.sha1(str(mp4_path.resolve()).encode("utf-8")).hexdigest()[:12]
+    # Keep this byte-for-byte aligned with LipSyncDataset._lazy_cache_dir.
+    # The dataset uses os.path.abspath(), not realpath/resolve(); resolving
+    # symlinks changes cache keys on Vast where data/* points to /workspace/data/*.
+    digest = hashlib.sha1(str(mp4_path.absolute()).encode("utf-8")).hexdigest()[:12]
     return base_root / f"{name}--{digest}"
 
 
