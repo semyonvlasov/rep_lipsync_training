@@ -28,7 +28,7 @@ DEFAULT_SYNC_ALIGNMENT_REMOTE_NAME = "sync_alignment_manifest.jsonl"
 DEFAULT_GENERATOR_GAN_CONFIG = "configs/generator_mirror_gan_tiltaware_dataset_adaptive.yaml"
 DEFAULT_GENERATOR_PREPARED_DIR = "output/generator_mirror_gan_tiltaware_dataset_adaptive_prepared"
 DEFAULT_GENERATOR_SPLIT_DIR = "output/generator_mirror_gan_tiltaware_dataset_adaptive_split"
-DEFAULT_GENERATOR_VAL_SNAPSHOT = "snapshots/val_snapshot_talkvid_balanced_eth_gender_20260408.txt"
+DEFAULT_GENERATOR_VAL_SNAPSHOT = "snapshots/val_snapshot_talkvid_balanced_eth_gender_current_20260430.txt"
 DEFAULT_HDTF_ROOT = "data/hdtf/processed"
 DEFAULT_TALKVID_ROOT = "data/talkvid/processed"
 
@@ -661,8 +661,8 @@ def build_parser() -> argparse.ArgumentParser:
     split_generator.add_argument("--prepared-dir", default=DEFAULT_GENERATOR_PREPARED_DIR)
     split_generator.add_argument("--split-dir", default=DEFAULT_GENERATOR_SPLIT_DIR)
     split_generator.add_argument("--val-snapshot", default=DEFAULT_GENERATOR_VAL_SNAPSHOT)
-    split_generator.add_argument("--hdtf-tiers", default="confident")
-    split_generator.add_argument("--talkvid-tiers", default="confident,medium")
+    split_generator.add_argument("--hdtf-tiers", default="confident,medium,unconfident")
+    split_generator.add_argument("--talkvid-tiers", default="confident,medium,unconfident")
     split_generator.add_argument("--hdtf-root-rel", default=DEFAULT_HDTF_ROOT)
     split_generator.add_argument("--talkvid-root-rel", default=DEFAULT_TALKVID_ROOT)
     split_generator.add_argument("--force-prepared", action="store_true")

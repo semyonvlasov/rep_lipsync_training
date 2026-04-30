@@ -89,10 +89,28 @@ export HF_TOKEN=hf_...
 hf auth whoami
 ```
 
+From macOS, if the token is already in the clipboard, install it on the remote
+instance without printing it:
+
+```bash
+pbpaste | LC_ALL=C tr -d '\n\r ' | ssh -p <port> root@<vast-host> '
+  set -e
+  install -d -m 700 /root/.cache/huggingface
+  cat > /root/.cache/huggingface/token
+  chmod 600 /root/.cache/huggingface/token
+  hf auth whoami
+'
+```
+
 Preferred export flow streams shards to a HF dataset repo. With
 `--delete-uploaded-shards`, each local shard is removed only after a successful
-upload, so peak disk usage is roughly the dataset plus one shard. Put each
-snapshot into its own HF branch/revision so later exports do not overwrite it.
+upload, so peak disk usage is roughly the dataset plus one shard. The exporter
+removes and recreates `--snapshot-dir` at startup; write nohup logs outside that
+directory. The snapshot includes `prepared/`, `split/`, `merge_manifest.jsonl`,
+`sync_alignment_manifest.jsonl`, `sample_index.jsonl`, `cache_index.jsonl`, and
+tar shards. For immutable archives, put each snapshot into its own HF
+branch/revision so later exports do not overwrite it. For the current active
+dataset, upload to `main`.
 
 ```bash
 lipsyncctl split-generator-dataset
@@ -112,6 +130,25 @@ hf download <namespace>/<dataset-repo> \
   --local-dir /opt/lipsync/training/output/dataset_snapshots/generator_tiltaware_YYYYMMDD
 lipsyncctl import-dataset-snapshot \
   --snapshot-dir output/dataset_snapshots/generator_tiltaware_YYYYMMDD
+```
+
+Current active dataset upload example:
+
+```bash
+ssh -p <port> root@<vast-host> '
+  set -e
+  cd /opt/lipsync/training
+  mkdir -p output/dataset_snapshots
+  nohup lipsyncctl export-dataset-snapshot \
+    --snapshot-dir output/dataset_snapshots/generator_tiltaware_current_YYYYMMDD \
+    --hf-repo-id semyonvlasov/x96_lipsync_tilt \
+    --hf-revision main \
+    --delete-uploaded-shards \
+    > output/dataset_snapshots/generator_tiltaware_current_YYYYMMDD_export_hf.log 2>&1 &
+'
+
+ssh -p <port> root@<vast-host> \
+  'tail -f /opt/lipsync/training/output/dataset_snapshots/generator_tiltaware_current_YYYYMMDD_export_hf.log'
 ```
 
 If you intentionally want a full local snapshot first, omit `--hf-repo-id` from

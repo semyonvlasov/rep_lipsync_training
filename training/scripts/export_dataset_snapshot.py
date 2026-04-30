@@ -104,7 +104,11 @@ def mel_cache_name(cfg: dict) -> str:
 
 
 def relpath(path: Path) -> str:
-    return str(path.resolve().relative_to(TRAINING_ROOT.resolve()))
+    absolute = path if path.is_absolute() else TRAINING_ROOT / path
+    try:
+        return str(absolute.absolute().relative_to(TRAINING_ROOT.absolute()))
+    except ValueError:
+        return str(absolute.resolve().relative_to(TRAINING_ROOT.resolve()))
 
 
 def infer_dataset_kind(root: Path, meta: dict) -> str:

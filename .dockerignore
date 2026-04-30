@@ -8,7 +8,10 @@ __pycache__
 
 data/
 training/output/
-training/snapshots/
+training/snapshots/*
+!training/snapshots/
+!training/snapshots/val_snapshot_talkvid_balanced_eth_gender_current_20260430.txt
+!training/snapshots/val_snapshot_talkvid_balanced_eth_gender_current_20260430_summary.json
 training/data/_imports/
 training/data/_lazy_cache*/
 training/data/hdtf/

@@ -1,0 +1,130 @@
+{
+  "mode": "talkvid_balanced_ethnicity_gender_unique_then_nonunique_same_group",
+  "seed": 20260430,
+  "target_per_group_requested": 314,
+  "target_per_group_actual": 314,
+  "total_selected": 1884,
+  "eligible_manifest": "/tmp/generator_eligible_manifest_current_20260430.json",
+  "talkvid_eligible_total": 28109,
+  "available_by_group": {
+    "african_female": 2884,
+    "african_male": 515,
+    "asian_female": 4060,
+    "asian_male": 2191,
+    "white_female": 12869,
+    "white_male": 5540
+  },
+  "group_summaries": {
+    "african_female": {
+      "available_clips": 2884,
+      "available_speakers": 204,
+      "selected": 314,
+      "direct_unique_speaker_selected": 204,
+      "nonunique_same_group_selected": 110,
+      "selected_tier_counts": {
+        "confident": 22,
+        "medium": 65,
+        "unconfident": 227
+      }
+    },
+    "african_male": {
+      "available_clips": 515,
+      "available_speakers": 51,
+      "selected": 314,
+      "direct_unique_speaker_selected": 51,
+      "nonunique_same_group_selected": 263,
+      "selected_tier_counts": {
+        "confident": 16,
+        "medium": 82,
+        "unconfident": 216
+      }
+    },
+    "asian_female": {
+      "available_clips": 4060,
+      "available_speakers": 499,
+      "selected": 314,
+      "direct_unique_speaker_selected": 314,
+      "nonunique_same_group_selected": 0,
+      "selected_tier_counts": {
+        "confident": 36,
+        "medium": 71,
+        "unconfident": 207
+      }
+    },
+    "asian_male": {
+      "available_clips": 2191,
+      "available_speakers": 205,
+      "selected": 314,
+      "direct_unique_speaker_selected": 205,
+      "nonunique_same_group_selected": 109,
+      "selected_tier_counts": {
+        "confident": 48,
+        "medium": 101,
+        "unconfident": 165
+      }
+    },
+    "white_female": {
+      "available_clips": 12869,
+      "available_speakers": 1255,
+      "selected": 314,
+      "direct_unique_speaker_selected": 314,
+      "nonunique_same_group_selected": 0,
+      "selected_tier_counts": {
+        "confident": 14,
+        "medium": 88,
+        "unconfident": 212
+      }
+    },
+    "white_male": {
+      "available_clips": 5540,
+      "available_speakers": 705,
+      "selected": 314,
+      "direct_unique_speaker_selected": 314,
+      "nonunique_same_group_selected": 0,
+      "selected_tier_counts": {
+        "confident": 29,
+        "medium": 86,
+        "unconfident": 199
+      }
+    }
+  },
+  "missing_metadata_count": 0,
+  "missing_metadata_examples": [],
+  "unsupported_metadata_count": 50,
+  "unsupported_metadata_examples": [
+    {
+      "ethnicity": "Unknown",
+      "gender": "Unknown",
+      "count": 48
+    },
+    {
+      "ethnicity": "Unknown",
+      "gender": "Female",
+      "count": 2
+    }
+  ],
+  "first_10_names": [
+    "videovideoRl5Y9Eem3tc-scene248-scene11_seg_000",
+    "videovideo_D-rl2KMhFQM-scene160-scene1_seg_000",
+    "videovideo_Ycvi3KMcUF0-scene8-scene8_seg_000",
+    "videovideo5bm5tT0bN7c-scene24-scene1_seg_000",
+    "videovideoq8PHEocBISQ-scene16-scene1_seg_000",
+    "videovideocx3-rAUSS88-scene46-scene7_seg_000",
+    "videovideoNlMw41wjCrg-scene22-scene5_seg_000",
+    "videovideol9PdvvP0n9c-scene55-scene9_seg_000",
+    "videovideoUzt-Woc3CVk-scene56-scene4_seg_000",
+    "videovideoFXSJyckb5-E-scene9-scene4_seg_000"
+  ],
+  "last_10_names": [
+    "videovideo4265_ZqIrfyPk2yo-scene5-scene67_seg_000",
+    "videovideo_QIqWQeDFQXg-scene28-scene81_seg_001",
+    "videovideo4198_xnxvT2Zxgrg-scene5-scene40_seg_004",
+    "videovideo5bm5tT0bN7c-scene14-scene1_seg_000",
+    "videovideoc_3t5bUFHHA-scene3-scene12_seg_001",
+    "videovideoVd2_Q6rlwBU-scene72-scene1_seg_001",
+    "videovideoTZW9_QJM99I-scene27-scene4_seg_003",
+    "videovideopqptRBtXkbI-scene5-scene71_seg_000",
+    "videovideo5DABHYfvxio-scene13-scene14_seg_000",
+    "videovideoto9er1rq0AE-scene5-scene4_seg_000"
+  ]
+}
