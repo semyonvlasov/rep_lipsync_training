@@ -6,11 +6,27 @@ Build and push the public runtime image:
 docker buildx build \
   --platform linux/amd64 \
   -f docker/training/Dockerfile \
-  -t <dockerhub-user>/rep-lipsync-training:cuda12.8 \
+  -t semyonvlasov/lipsync-training:cuda12.8 \
   --push .
 ```
 
 Preferred Vast AI flow: set the image when creating/renting the instance.
+Find an offer first. By default the helper searches all hosts; add `--eu-only`
+when a Europe-only shortlist is needed. `--extra-query` is passed into the
+Vast search query, not filtered only after the first result page.
+
+```bash
+python3 training/scripts/search_vast_eu_offers.py \
+  --storage-gb 800 \
+  --min-days 7 \
+  --limit 20 \
+  --extra-query 'gpu_name in [RTX_3090,RTX_4090]'
+
+python3 training/scripts/search_vast_eu_offers.py \
+  --storage-gb 800 \
+  --eu-only \
+  --extra-query 'gpu_name in [RTX_3090,RTX_4090]'
+```
 
 ```bash
 vastai create instance <offer_id> \
@@ -42,7 +58,7 @@ Docker is available inside the host:
 docker run --gpus all --ipc=host --shm-size=32g --rm -it \
   -v /workspace/lipsync:/workspace \
   -v /root/.config/rclone/rclone.conf:/run/secrets/rclone.conf:ro \
-  <dockerhub-user>/rep-lipsync-training:cuda12.8 \
+  semyonvlasov/lipsync-training:cuda12.8 \
   prepare
 ```
 
@@ -53,7 +69,6 @@ lipsyncctl doctor --require-prepared
 lipsyncctl merge-dataset --include-tier confident --include-tier medium
 lipsyncctl prewarm-cache --max-items 512
 lipsyncctl train-syncnet
-lipsyncctl train-generator
 lipsyncctl train-generator-gan
 lipsyncctl benchmark --device cuda
 ```
@@ -61,6 +76,11 @@ lipsyncctl benchmark --device cuda
 Private/current-best checkpoints are intentionally downloaded at runtime by
 `lipsyncctl prepare` through `rclone backend copyid`; they are not baked into
 the public DockerHub image.
+
+The image clones `face_processing` from the public external repository at
+build time into `/opt/face_processing`, exposes it through
+`FACE_PROCESSING_REPO_ROOT`/`PYTHONPATH`, and does not vendor
+`face_processing/` inside `/opt/lipsync`.
 
 Troubleshooting:
 

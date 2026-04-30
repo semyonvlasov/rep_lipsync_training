@@ -1,7 +1,8 @@
 # rep_lipsync_training
 
 Training-focused repository for a LipSync generator + SyncNet teacher workflow,
-plus the official Wav2Lip benchmark path used for report baselines.
+plus the canonical face_processing-based benchmark path used for report
+baselines.
 
 This repo intentionally keeps only the current training pipeline, configs,
 orchestration scripts, handoffs, and deployment helpers. Runtime data,
@@ -26,13 +27,10 @@ checkpoints, archives, and output artifacts are excluded from git.
 - `training/workflows/train`
   Full mixed training pipeline, SyncNet snapshot training, generator teacher
   comparison, and remote sync/launch wrappers.
-- `training/scripts/run_official_wav2lip_benchmark.py`
-  Official Wav2Lip-style benchmark runner:
-  `SFD -> 96x96 Wav2Lip -> paste-back -> mux audio`.
+- `training/scripts/run_lipsync_benchmark.py`
+  Canonical x96 benchmark runner:
+  `face_processing framedata -> fixed median face crop -> x96 generator -> face_framedata restore -> mux audio`.
   Checkpoints are external and are not stored in git.
-- `training/scripts/run_tilt_aware_x96_benchmark.py`
-  Tilt-aware x96 benchmark runner:
-  `MediaPipe landmarks + stabilized pad-to-square faceclip -> resize to 96x96 Wav2Lip-like model -> resize back -> inverse paste-back -> mux audio`.
 - `models/official_syncnet`
   External reference SyncNet code and SFD face detector code. Checkpoints are
   expected locally under `models/official_syncnet/checkpoints/` but are not
@@ -56,8 +54,7 @@ checkpoints, archives, and output artifacts are excluded from git.
 - teacher comparison against the official reference SyncNet
 - generator training with watchdog
 - generator teacher comparison workflow
-- official `Wav2Lip` benchmark inference path for report baselines
-- tilt-aware `x96` benchmark inference path for roll-aware crop / paste-back comparisons
+- canonical `x96` benchmark inference path for report baselines
 - local processed-faceclip export pipeline
 
 ## Intentionally excluded for now
@@ -83,8 +80,7 @@ purpose. They should be reviewed one by one before being added:
    `make smoke-lazy`
    `make train-syncnet`
    `make train-generator`
-   `make bench-wav2lip`
-   `make bench-tilt-aware-x96`
+   `make bench-lipsync`
 
 ## Make targets
 
@@ -93,11 +89,11 @@ purpose. They should be reviewed one by one before being added:
   `ffmpeg`, `libsndfile1`, `rsync`, `rclone`, `git`, `make`, plus the Python
   packages listed in `training/requirements-server.txt`.
 - `make remote-bootstrap-benchmarks`
-  Prepares a remote Ubuntu/Debian box for both benchmark paths:
-  installs the server Python dependencies, fetches the official SyncNet
-  checkpoint, uploads the MediaPipe `face_landmarker_v2_with_blendshapes.task`
-  asset to `models/face_processing/`, and prewarms the SFD detector used by the
-  official benchmark path.
+  Prepares a remote Ubuntu/Debian box for the benchmark path:
+  installs the server Python dependencies, uploads the MediaPipe
+  `face_landmarker_v2_with_blendshapes.task` asset to `models/face_processing/`,
+  and makes the external `face_processing` repository available to the
+  benchmark path.
 - `make smoke-lazy`
   Runs the lazy-dataset smoke workflow in
   `training/workflows/train/run_lazy_smoke_remote_20260325.sh`.
@@ -124,16 +120,14 @@ purpose. They should be reviewed one by one before being added:
   CPU, RAM, GPU, VRAM, power, temperature, and RX/TX throughput. Intended to
   be started immediately after provisioning a fresh remote box and left running
   during training.
-- `make bench-wav2lip`
-  Runs the official Wav2Lip benchmark path with:
-  `SFD face detection -> 96x96 Wav2Lip -> paste-back`.
-  Required overrides:
-  `BENCH_FACE=...`
-  `BENCH_AUDIO=...`
-  `BENCH_CHECKPOINT=...`
-- `make bench-tilt-aware-x96`
-  Runs the tilt-aware x96 benchmark path with:
-  `MediaPipe face landmarks -> stabilized pad-to-square native faceclip -> Wav2Lip-like x96 -> inverse paste-back`.
+- `python3 training/scripts/search_vast_eu_offers.py`
+  Lists cheap reliable Vast AI offers with base GPU price, storage price, and
+  total hourly price split out. By default it searches all hosts; pass
+  `--eu-only` to restrict to the built-in Europe allowlist, or repeat
+  `--country DE --country NL` for an explicit country allowlist.
+- `make bench-lipsync`
+  Runs the canonical benchmark path with:
+  `face_processing framedata -> fixed median face crop -> x96 generator -> face_framedata restore`.
   Required overrides:
   `BENCH_FACE=...`
   `BENCH_AUDIO=...`
@@ -141,16 +135,6 @@ purpose. They should be reviewed one by one before being added:
   Useful optional overrides:
   `BENCH_FACE_LANDMARKER_PATH=...`
   `BENCH_LANDMARKER_DEVICE=cpu|gpu|auto`
-- `make publish-checkpoint-benchmark`
-  Remote-friendly checkpoint publish path:
-  saves a slim `infer_only` checkpoint when needed, uploads checkpoint artifacts
-  to the shared Drive, runs the same official Wav2Lip-style benchmark on-server,
-  writes `checkpoint_publish_manifest.json`, and prints a recommended `scp`
-  command for copying only the small benchmark MP4s back locally.
-  Required overrides:
-  `PUBLISH_CHECKPOINT=...`
-  `PUBLISH_FACE_LIST="... ..."`
-  `PUBLISH_AUDIO=...`
 - `make upload-training-artifacts`
   Uploads a finished run to the shared training-artifacts Drive folder, writes
   `artifacts_upload_manifest.json`, and appends a git-tracked run entry with:

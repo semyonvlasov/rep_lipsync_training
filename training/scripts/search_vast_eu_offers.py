@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-List cheap reliable European Vast AI offers for training.
+List cheap reliable Vast AI offers for training.
 
 Example:
   python3 training/scripts/search_vast_eu_offers.py --storage-gb 800 --limit 20
+  python3 training/scripts/search_vast_eu_offers.py --storage-gb 800 --eu-only
+  python3 training/scripts/search_vast_eu_offers.py --storage-gb 800 --country DE --country NL
 
 The script asks Vast to price the requested local storage amount, then prints
 base GPU price, storage price, and total hourly price separately.
@@ -73,8 +75,9 @@ def run_vast_search(args: argparse.Namespace) -> list[dict[str, Any]]:
         "rented=false",
         f"reliability>={args.min_reliability}",
         f"disk_space>={args.storage_gb}",
-        f"geolocation in [{','.join(args.country)}]",
     ]
+    if args.country_filter:
+        query_parts.append(f"geolocation in [{','.join(args.country_filter)}]")
     if args.min_gpus is not None:
         query_parts.append(f"num_gpus>={args.min_gpus}")
     if args.max_gpus is not None:
@@ -180,7 +183,7 @@ def filter_and_enrich(args: argparse.Namespace, offers: list[dict[str, Any]]) ->
         if args.min_gpu_ram_gb is not None and gpu_ram_gb(offer) < args.min_gpu_ram_gb:
             continue
         code = country_code(offer)
-        if code not in args.country:
+        if args.country_filter and code not in args.country_filter:
             continue
         base, storage, total = price_parts(offer, args.storage_gb)
         row = dict(offer)
@@ -280,7 +283,7 @@ def print_table(rows: list[dict[str, Any]], storage_gb: float) -> None:
 
 def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="List cheapest reliable European Vast AI offers with explicit storage pricing.",
+        description="List cheapest reliable Vast AI offers with explicit storage pricing.",
     )
     parser.add_argument("--storage-gb", type=float, required=True, help="Requested local storage in GiB/GB for Vast pricing")
     parser.add_argument("--limit", type=int, default=20, help="Number of filtered offers to print")
@@ -292,10 +295,15 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--min-gpu-ram-gb", type=float, default=None)
     parser.add_argument("--min-cuda", type=float, default=None)
     parser.add_argument(
+        "--eu-only",
+        action="store_true",
+        help="Restrict offers to the built-in Europe allowlist: EU/EEA + UK + CH + LI.",
+    )
+    parser.add_argument(
         "--country",
         action="append",
         default=[],
-        help="Allowed country code. Can be repeated. Default: EU/EEA + UK + CH + LI.",
+        help="Allowed country code. Can be repeated. Default: all countries unless --eu-only is set.",
     )
     parser.add_argument(
         "--extra-query",
@@ -317,7 +325,8 @@ def main() -> int:
         raise SystemExit("--limit must be positive")
     if args.search_limit < args.limit:
         raise SystemExit("--search-limit must be >= --limit")
-    args.country = tuple(code.strip().upper() for code in (args.country or DEFAULT_EUROPE_COUNTRY_CODES))
+    explicit_countries = tuple(code.strip().upper() for code in args.country if code.strip())
+    args.country_filter = explicit_countries or (DEFAULT_EUROPE_COUNTRY_CODES if args.eu_only else ())
 
     offers = run_vast_search(args)
     rows = filter_and_enrich(args, offers)
