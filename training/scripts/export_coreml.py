@@ -12,19 +12,52 @@ import argparse
 import os
 import sys
 import time
+from pathlib import Path
 import torch
 import coremltools as ct
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TRAINING_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = TRAINING_ROOT.parent
+sys.path.insert(0, str(TRAINING_ROOT))
 from models import LipSyncGenerator
 from config_loader import load_config
+
+
+def load_official_wav2lip_class():
+    candidate_roots = [
+        REPO_ROOT.parent / "models" / "wav2lip",
+        REPO_ROOT / "models" / "wav2lip",
+    ]
+    for root in candidate_roots:
+        if not (root / "models").exists():
+            continue
+        root_str = str(root)
+        if root_str not in sys.path:
+            sys.path.insert(0, root_str)
+        for name in list(sys.modules):
+            if name == "models" or name.startswith("models."):
+                del sys.modules[name]
+        from models import Wav2Lip
+
+        return Wav2Lip
+    raise RuntimeError("Could not locate local official Wav2Lip package root")
+
+
+def is_official_style_state_dict(state_dict: dict[str, torch.Tensor]) -> bool:
+    return any(".conv_block." in key for key in state_dict) or any(
+        key.startswith("output_block.") for key in state_dict
+    )
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--config", default=None, help="Config file (overrides checkpoint config)")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Config file. Required when the checkpoint does not embed config metadata.",
+    )
     parser.add_argument("--output", default=None)
     parser.add_argument("--fp16", action="store_true", default=True)
     args = parser.parse_args()
@@ -32,18 +65,46 @@ def main():
     # Load checkpoint
     print(f"Loading {args.checkpoint}...")
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    cfg = ck["config"]
+    if isinstance(ck, dict) and "generator" in ck:
+        state_dict = ck["generator"]
+    elif isinstance(ck, dict) and "state_dict" in ck:
+        state_dict = ck["state_dict"]
+    else:
+        state_dict = ck
+
+    if not isinstance(state_dict, dict):
+        raise KeyError(
+            "Could not locate generator weights in checkpoint. "
+            "Expected one of: checkpoint['generator'], checkpoint['state_dict'], or a raw state_dict."
+        )
+
+    official_style = is_official_style_state_dict(state_dict)
+
+    cfg = ck.get("config") if isinstance(ck, dict) else None
     if args.config:
         cfg = load_config(args.config)
+    if cfg is None and official_style:
+        cfg = {"model": {"img_size": 96, "predict_alpha": False, "base_channels": 32}}
+    if cfg is None:
+        raise KeyError(
+            "Checkpoint does not contain embedded config. "
+            "Pass --config with the training yaml used for this model."
+        )
     img_size = cfg["model"]["img_size"]
     predict_alpha = cfg["model"]["predict_alpha"]
 
-    model = LipSyncGenerator(
-        img_size=img_size,
-        base_channels=cfg["model"]["base_channels"],
-        predict_alpha=predict_alpha,
-    )
-    model.load_state_dict(ck["generator"])
+    if official_style:
+        Wav2Lip = load_official_wav2lip_class()
+        model = Wav2Lip()
+        predict_alpha = False
+        img_size = 96
+    else:
+        model = LipSyncGenerator(
+            img_size=img_size,
+            base_channels=cfg["model"]["base_channels"],
+            predict_alpha=predict_alpha,
+        )
+    model.load_state_dict(state_dict)
     model.eval()
 
     print(f"Model: img_size={img_size}, predict_alpha={predict_alpha}")
@@ -69,7 +130,7 @@ def main():
             self.gen = gen
 
         def forward(self, mel, face):
-            if self.gen.predict_alpha:
+            if getattr(self.gen, "predict_alpha", False):
                 f, a = self.gen(mel, face)
                 return f, a
             return self.gen(mel, face)

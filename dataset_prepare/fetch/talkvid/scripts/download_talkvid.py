@@ -385,18 +385,29 @@ def cleanup_clip_outputs(output_path: str) -> None:
             pass
 
 
-def has_audio_stream(video_path: str) -> bool:
+def _float_or_none(value: object) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _timing_tolerance(expected_duration: float, seconds: float, ratio: float) -> float:
+    return max(seconds, expected_duration * ratio)
+
+
+def validate_downloaded_clip(
+    video_path: str,
+    expected_duration: float,
+) -> tuple[bool, str, Optional[str]]:
     probe = subprocess.run(
         [
             "ffprobe",
             "-v",
             "error",
-            "-select_streams",
-            "a",
             "-show_entries",
-            "stream=index",
-            "-of",
-            "csv=p=0",
+            "format=duration:stream=index,codec_type,start_time,duration",
+            "-of", "json",
             video_path,
         ],
         capture_output=True,
@@ -405,7 +416,79 @@ def has_audio_stream(video_path: str) -> bool:
     )
     if probe.returncode != 0:
         raise OSError(f"ffprobe failed for {video_path}: {probe.stderr.strip() or probe.stdout.strip()}")
-    return bool(probe.stdout.strip())
+
+    try:
+        media = json.loads(probe.stdout)
+    except json.JSONDecodeError as exc:
+        raise OSError(f"ffprobe returned invalid JSON for {video_path}: {exc}") from exc
+
+    streams = media.get("streams") or []
+    video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
+    audio_streams = [stream for stream in streams if stream.get("codec_type") == "audio"]
+    if not audio_streams:
+        return False, "no_audio_stream", "downloaded mp4 has no audio stream"
+    if not video_streams:
+        return False, "bad_av_timing", "downloaded mp4 has no video stream"
+
+    if expected_duration <= 0:
+        return False, "bad_av_timing", f"invalid expected_duration={expected_duration:.3f}s"
+
+    format_duration = _float_or_none((media.get("format") or {}).get("duration"))
+    video_duration = _float_or_none(video_streams[0].get("duration"))
+    audio_duration = _float_or_none(audio_streams[0].get("duration"))
+    audio_start = _float_or_none(audio_streams[0].get("start_time")) or 0.0
+
+    max_duration_extra = _timing_tolerance(expected_duration, seconds=1.0, ratio=0.20)
+    max_duration = expected_duration + max_duration_extra
+    min_duration = max(0.0, expected_duration - max_duration_extra)
+    max_audio_short = _timing_tolerance(expected_duration, seconds=0.75, ratio=0.15)
+    min_audio_duration = max(0.0, expected_duration - max_audio_short)
+    max_audio_start = _timing_tolerance(expected_duration, seconds=0.75, ratio=0.15)
+
+    for label, duration in (("container", format_duration), ("video", video_duration)):
+        if duration is None:
+            return False, "bad_av_timing", f"missing {label} duration metadata"
+        if duration > max_duration:
+            return (
+                False,
+                "bad_av_timing",
+                (
+                    f"{label}_duration={duration:.3f}s expected={expected_duration:.3f}s "
+                    f"allowed_extra={max_duration_extra:.3f}s"
+                ),
+            )
+        if duration < min_duration:
+            return (
+                False,
+                "bad_av_timing",
+                (
+                    f"{label}_duration={duration:.3f}s expected={expected_duration:.3f}s "
+                    f"allowed_short={max_duration_extra:.3f}s"
+                ),
+            )
+
+    if audio_duration is None:
+        return False, "bad_av_timing", "missing audio duration metadata"
+    if audio_duration < min_audio_duration:
+        return (
+            False,
+            "bad_av_timing",
+            (
+                f"audio_duration={audio_duration:.3f}s expected={expected_duration:.3f}s "
+                f"allowed_short={max_audio_short:.3f}s"
+            ),
+        )
+    if audio_start > max_audio_start:
+        return (
+            False,
+            "bad_av_timing",
+            (
+                f"audio_start={audio_start:.3f}s expected_duration={expected_duration:.3f}s "
+                f"allowed_start={max_audio_start:.3f}s"
+            ),
+        )
+
+    return True, "ok", None
 
 
 def download_clip(
@@ -493,9 +576,13 @@ def download_clip(
             size_bytes = os.path.getsize(output_path)
         except OSError:
             size_bytes = 0
-        if not has_audio_stream(output_path):
+        valid_clip, validation_reason, validation_detail = validate_downloaded_clip(
+            output_path,
+            expected_duration=end - start,
+        )
+        if not valid_clip:
             cleanup_clip_outputs(output_path)
-            return False, "no_audio_stream", 0, "downloaded mp4 has no audio stream"
+            return False, validation_reason, 0, validation_detail
         return True, "ok", size_bytes, None
     except subprocess.TimeoutExpired:
         return False, "timeout", 0, None
