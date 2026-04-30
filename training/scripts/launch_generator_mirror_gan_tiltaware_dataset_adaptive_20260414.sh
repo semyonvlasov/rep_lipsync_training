@@ -12,6 +12,7 @@ SPEAKER_LIST="$SPLIT_DIR/train_snapshot.txt"
 VAL_SPEAKER_LIST="$SPLIT_DIR/val_snapshot.txt"
 VAL_SNAPSHOT_SOURCE="${VAL_SNAPSHOT_SOURCE:-$TRAINING_ROOT/snapshots/val_snapshot_talkvid_balanced_eth_gender_20260408.txt}"
 SYNCNET="${SYNCNET_CKPT:-$TRAINING_ROOT/output/syncnet_current_best_20260428/syncnet_best_our_eval.pth}"
+EVAL_SEED="${EVAL_SEED:-20260408}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 HDTF_TIERS="${HDTF_TIERS:-confident}"
 TALKVID_TIERS="${TALKVID_TIERS:-confident,medium}"
@@ -43,5 +44,6 @@ cd "$TRAINING_ROOT"
 exec "$PYTHON_BIN" "$TRAINING_ROOT/scripts/train_generator_mirror_gan.py" \
   --config "$CONFIG" \
   --syncnet "$SYNCNET" \
+  --eval-seed "$EVAL_SEED" \
   --speaker-list "$SPEAKER_LIST" \
   --val-speaker-list "$VAL_SPEAKER_LIST"

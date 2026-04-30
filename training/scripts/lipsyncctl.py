@@ -370,6 +370,7 @@ def command_train_generator_gan(args: argparse.Namespace) -> int:
         cmd.extend(["--speaker-list", args.speaker_list])
     if args.val_speaker_list:
         cmd.extend(["--val-speaker-list", args.val_speaker_list])
+    cmd.extend(["--eval-seed", str(args.eval_seed)])
     run(cmd, cwd=TRAINING_ROOT, env=runtime_env(args), dry_run=args.dry_run)
     return 0
 
@@ -509,12 +510,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     train_gan = subparsers.add_parser("train-generator-gan", help="Run mirror official-HQ GAN generator training")
     add_common_runtime_args(train_gan)
-    train_gan.add_argument("--config", default="configs/generator_mirror_gan_hdtf_talkvid.yaml")
+    train_gan.add_argument("--config", default="configs/generator_mirror_gan_tiltaware_dataset_adaptive_20260414.yaml")
     train_gan.add_argument("--syncnet", default="output/syncnet_current_best_20260428/syncnet_best_our_eval.pth")
     train_gan.add_argument("--resume", default=None)
     train_gan.add_argument("--disc-resume", default=None)
     train_gan.add_argument("--speaker-list", default=None)
     train_gan.add_argument("--val-speaker-list", default=None)
+    train_gan.add_argument("--eval-seed", type=int, default=20260408)
     train_gan.set_defaults(func=command_train_generator_gan)
 
     benchmark = subparsers.add_parser("benchmark", help="Run the tilt-aware x96 benchmark")

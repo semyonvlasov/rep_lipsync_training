@@ -27,20 +27,65 @@ syncnet:
 generator_mirror_gan:
   epochs: 13
   batch_size: 32
+  sampling_mode: uniform
   lr: 1.0e-4
   disc_lr: 1.0e-4
   betas: [0.5, 0.999]
   checkpoint_interval_steps: 3000
   save_sample_images: false
   sample_interval_steps: 0
-  eval_interval_steps: 3000
-  eval_steps: 300
-  save_optimizer_state: true
+  eval_interval_steps: 1000
+  eval_batches_count: 300
+  eval_seed: 20260408  # fixed val sampling for scheduler stability
+  train_log_interval_steps: 50  # plain-text train status line; keep searchable independently of tqdm carriage returns
+  save_optimizer_state: true  # legacy knob; periodic recovery checkpoints are always fp16 without optimizer state
+  save_last_healthy: true
+
+  # Legacy fixed-weight fallback. Adaptive scheduler below is enabled by default.
   syncnet_wt_initial: 0.0
-  syncnet_wt_target: 0.03
-  syncnet_enable_threshold: 0.75
-  disc_wt: 0.07
+  syncnet_wt_target: 0.10
+  syncnet_enable_threshold: 0.90
+  disc_wt: 0.20
+  disc_wt_initial: 0.0
+
+  # Eval-driven adaptive weight controller.
+  adaptive_loss_schedule: true
+  sync_wt_step_up: 0.005
+  sync_wt_step_down: 0.01
+  disc_wt_step_up: 0.005
+  disc_wt_step_down: 0.01
+  max_sync_wt: 0.20
+  max_disc_wt: 0.30
+  max_total_wt: 0.35
+  l1_guard_max_ratio: 1.15
+  disc_guard_max_gap: 0.15
+
+  # Disable separate fake/real range checks; use only the fake-real gap guard.
+  healthy_fake_min: null
+  healthy_fake_max: null
+  healthy_real_min: null
+  healthy_real_max: null
+  healthy_max_fake_real_gap: 0.15
   val_num_workers: 4
+
+# Per-checkpoint benchmark samples bundled into the exported artifact tar.
+benchmark:
+  enabled: true
+  audio: output/benchmark_samples/short_4s.mp3
+  faces:
+    - output/benchmark_samples/portrait_avatar.mp4
+    - output/benchmark_samples/portrait_rama.mp4
+  device: cuda
+  detector_device: cuda
+  batch_size: 16
+  face_det_batch_size: 4
+
+# Host-side background upload of packaged checkpoint artifacts.
+checkpoint_publish:
+  enabled: true
+  remote: "gdrive:"
+  drive_root_folder_id: 1y1P-LI3YTPV65zpHXMSrNYsykN2-s5Pv
+  remote_dir_prefix: checkpoints
 
 data:
   hdtf_root: data/hdtf/processed
@@ -57,21 +102,6 @@ data:
   min_samples_per_speaker: 0
   materialize_frames_size: 96
   lazy_cache_root: null
-  sync_alignment:
-    enabled: true
-    compute_if_missing: true
-    guard_mel_ticks: 10
-    search_mel_ticks: 10
-    samples: 0
-    sample_density_per_5s: 10.0
-    seed: 20260403
-    min_start_gap_ratio: 0.0
-    start_gap_multiple: 0
-    device: auto
-    batch_size: 640
-    outlier_trim_ratio: 0.2
-    syncnet_checkpoint: null
-    write_manifest: true
 
 training:
   device: cuda

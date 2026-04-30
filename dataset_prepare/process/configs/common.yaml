@@ -12,6 +12,8 @@ gdrive:
     url: "https://drive.google.com/drive/folders/1v06momk8fR-eqw79Z93zczBx_InWsCS9?usp=drive_link"
     folder_id: "1v06momk8fR-eqw79Z93zczBx_InWsCS9"
   processed:
+    # Canonical default processed dataset for merge / training bootstrap.
+    # This is now the tilt-aware dataset root on Google Drive.
     url: "https://drive.google.com/drive/folders/1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52?usp=drive_link"
     folder_id: "1tCG51VM8bDmx9Ic3c3yipyThn6M6Ql52"
 
@@ -51,6 +53,7 @@ face_processing:
     max_delta_pitch: 10.0
     max_delta_roll: 12.0
     max_face_h_ratio_deviation: 0.12
+    max_face_w_ratio_deviation: 0.12
     min_confidence: 0.5
     min_segment_length: 50
     max_segment_length: 200
@@ -65,8 +68,12 @@ face_processing:
     conf_max_abs_pitch: 16.0
     conf_max_abs_roll: 12.0
     conf_face_size_std_ratio: 0.08
+    conf_face_width_std_ratio: 0.08
     conf_std_cx_ratio: 0.04
     conf_std_cy_ratio: 0.04
+    conf_eye_dist_std_ratio: 0.03
+    conf_eye_mouth_std_ratio: 0.03
+    conf_scale_outlier_ratio: 0.02
     conf_jump_ratio: 0.02
     conf_low_conf_ratio: 0.02
     med_mean_abs_yaw: 18.0
@@ -76,13 +83,17 @@ face_processing:
     med_max_abs_pitch: 20.0
     med_max_abs_roll: 18.0
     med_face_size_std_ratio: 0.15
+    med_face_width_std_ratio: 0.15
     med_std_cx_ratio: 0.08
     med_std_cy_ratio: 0.08
+    med_eye_dist_std_ratio: 0.06
+    med_eye_mouth_std_ratio: 0.06
+    med_scale_outlier_ratio: 0.05
     med_jump_ratio: 0.08
     med_low_conf_ratio: 0.08
 
   export:
-    mode: stretch_to_square
+    mode: median_face_rect
     fps: 25
     bitrate: 600k
     codec: auto

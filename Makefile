@@ -23,6 +23,9 @@ REMOTE_TORCH_VERSION ?= 2.10.0
 REMOTE_TORCHVISION_VERSION ?= 0.25.0
 REMOTE_TORCHAUDIO_VERSION ?= 2.10.0
 REMOTE_TORCH_INDEX_URL ?= https://download.pytorch.org/whl/cu128
+FACE_PROCESSING_GIT_URL ?= https://github.com/semyonvlasov/face_processing.git
+FACE_PROCESSING_REF ?= 4223501956614ccd878e398830c8d5d9e7fcc317
+FACE_PROCESSING_REMOTE_ROOT ?= $(REMOTE_ROOT)/../face_processing
 FACE_PROCESSING_MODEL_PATH ?=
 FACE_PROCESSING_MODEL_REPO_PATH ?= $(REPO_ROOT)/models/face_processing/face_landmarker_v2_with_blendshapes.task
 FACE_PROCESSING_MODEL_FALLBACK_PATH ?= $(abspath $(REPO_ROOT)/../../face_processing/assets/face_landmarker_v2_with_blendshapes.task)
@@ -55,12 +58,12 @@ TALKVID_FETCH_REVERSE ?= 0
 
 SERVER_PY_REQUIREMENTS := $(TRAINING_ROOT)/requirements-server.txt
 FETCH_VENV ?= $(REPO_ROOT)/.venv-fetch
-PROCESS_PREWARM_SFD ?= 1
-
 SMOKE_LAZY_WORKFLOW ?= workflows/train/run_lazy_smoke_remote_20260325.sh
 SYNCNET_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
 GENERATOR_CONFIG ?= configs/lipsync_cuda3090_hdtf_talkvid.yaml
-GENERATOR_MIRROR_GAN_CONFIG ?= configs/generator_mirror_gan_hdtf_talkvid.yaml
+GENERATOR_MIRROR_GAN_CONFIG ?= configs/generator_mirror_gan_tiltaware_dataset_adaptive_20260414.yaml
+GENERATOR_MIRROR_GAN_SYNCNET ?= output/syncnet_current_best_20260428/syncnet_best_our_eval.pth
+GENERATOR_MIRROR_GAN_EVAL_SEED ?= 20260408
 PREWARM_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
 PREWARM_SPEAKER_LIST ?=
 PREWARM_LOG_EVERY ?= 100
@@ -125,33 +128,14 @@ BENCH_AUDIO ?=
 BENCH_CHECKPOINT ?=
 BENCH_OUTFILE ?=
 BENCH_DEVICE ?= auto
-BENCH_DETECTOR_DEVICE ?= auto
 BENCH_LANDMARKER_DEVICE ?= auto
 BENCH_BATCH_SIZE ?= 32
-BENCH_FACE_DET_BATCH_SIZE ?= 4
-BENCH_PADS ?= 0 10 0 0
 BENCH_RESIZE_FACTOR ?= 1
 BENCH_STATIC ?= 0
-BENCH_NOSMOOTH ?= 0
-BENCH_S3FD_PATH ?=
 BENCH_FACE_LANDMARKER_PATH ?=
 BENCH_KEEP_INTERMEDIATES ?= 0
-PUBLISH_CHECKPOINT ?=
-PUBLISH_INFER_ONLY_OUT ?=
-PUBLISH_RUN_NAME ?=
-PUBLISH_REMOTE ?= gdrive:
-PUBLISH_DRIVE_ROOT_ID ?= 1y1P-LI3YTPV65zpHXMSrNYsykN2-s5Pv
-PUBLISH_FACE_LIST ?=
-PUBLISH_AUDIO ?=
-PUBLISH_OUTPUT_DIR ?=
-PUBLISH_DEVICE ?= cuda
-PUBLISH_DETECTOR_DEVICE ?= cuda
-PUBLISH_BATCH_SIZE ?= 32
-PUBLISH_FACE_DET_BATCH_SIZE ?= 4
-PUBLISH_S3FD_PATH ?=
-PUBLISH_SKIP_UPLOAD ?= 0
 
-.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-bootstrap-talkvid-fetch-docker remote-bootstrap-benchmarks remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail remote-docker-talkvid-fetch-build remote-docker-talkvid-fetch-state remote-docker-talkvid-fetch-cookies remote-docker-talkvid-fetch-cookies-dual remote-docker-talkvid-fetch-start remote-docker-talkvid-fetch-stop remote-docker-talkvid-fetch-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-prewarm-sfd remote-fetch-official-syncnet remote-fetch-face-processing-model remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-wav2lip bench-tilt-aware-x96 publish-checkpoint-benchmark upload-training-artifacts
+.PHONY: help bootstrap-fetch bootstrap-process-lazy remote-bootstrap-process-lazy remote-bootstrap-process-docker remote-bootstrap-talkvid-fetch-docker remote-bootstrap-benchmarks remote-docker-host-setup remote-docker-process-model remote-docker-process-build remote-docker-process-start remote-docker-process-stop remote-docker-process-tail remote-docker-talkvid-fetch-build remote-docker-talkvid-fetch-state remote-docker-talkvid-fetch-cookies remote-docker-talkvid-fetch-cookies-dual remote-docker-talkvid-fetch-start remote-docker-talkvid-fetch-stop remote-docker-talkvid-fetch-tail server-setup remote-sync-code remote-server-setup remote-rclone-config remote-fetch-official-syncnet remote-fetch-face-processing-model remote-observe-system remote-bootstrap remote-faceclip-register remote-faceclip-unregister remote-faceclip-start faceclip-monitor-daemon-start faceclip-monitor-daemon-stop faceclip-monitor-refresh dataset remote-dataset smoke-lazy train-syncnet train-generator train-generator-mirror-gan prewarm-syncnet-cache observe-system watch-syncnet-generator bench-lipsync upload-training-artifacts
 
 help:
 	@echo "Available targets:"
@@ -159,7 +143,7 @@ help:
 	@echo "  make bootstrap-process-lazy # install local raw->lazy processing deps on Debian/Ubuntu"
 	@echo "  make remote-bootstrap-process-lazy # prepare a remote Linux box for raw->lazy processing over SSH"
 	@echo "  make remote-bootstrap-process-docker # prepare a remote Linux box for disposable Docker CPU processing over SSH"
-	@echo "  make remote-bootstrap-benchmarks # prepare a remote Linux box for official + tilt benchmarks over SSH"
+	@echo "  make remote-bootstrap-benchmarks # prepare a remote Linux box for the canonical lipsync benchmark over SSH"
 	@echo "  make server-setup    # install apt + pip deps for remote Linux/Vast training"
 	@echo "  make remote-sync-code # clone/pull the latest repo on a remote box and sync the official SyncNet checkpoint"
 	@echo "  make remote-server-setup # install apt + pip deps on a remote Linux/Vast box and verify torch/CUDA compatibility"
@@ -171,7 +155,6 @@ help:
 	@echo "  make remote-docker-talkvid-fetch-start # start the disposable Docker TalkVid fetch worker on a remote"
 	@echo "  make remote-docker-talkvid-fetch-stop # stop the disposable Docker TalkVid fetch worker on a remote"
 	@echo "  make remote-docker-talkvid-fetch-tail # tail the disposable Docker TalkVid fetch worker log on a remote"
-	@echo "  make remote-prewarm-sfd # legacy SFD checkpoint warmup (not used by the current face_processing pipeline)"
 	@echo "  make remote-fetch-official-syncnet # download official SyncNet checkpoint on the remote from Drive"
 	@echo "  make remote-observe-system # start the remote system observer"
 	@echo "  make remote-bootstrap # sync code, install deps, and start the remote observer"
@@ -188,9 +171,7 @@ help:
 	@echo "  make prewarm-syncnet-cache # pre-materialize lazy frames/mels into the configured cache root"
 	@echo "  make observe-system  # start a background CPU/RAM/GPU/VRAM/network observer"
 	@echo "  make watch-syncnet-generator # wait for SyncNet, benchmark all epochs vs official, then launch generator"
-	@echo "  make bench-wav2lip   # run the official Wav2Lip benchmark path (SFD + 96x96 generator)"
-	@echo "  make bench-tilt-aware-x96 # run the tilt-aware x96 benchmark path (MediaPipe stabilized pad-to-square faceclip + inverse paste-back)"
-	@echo "  make publish-checkpoint-benchmark # upload a checkpoint to Drive and benchmark it on-server"
+	@echo "  make bench-lipsync   # run the canonical benchmark path (face_processing framedata + x96 generator + restore)"
 	@echo "  make upload-training-artifacts # upload a finished run to Drive and append the git log"
 	@echo ""
 	@echo "Useful overrides:"
@@ -204,6 +185,7 @@ help:
 	@echo "  REMOTE_TORCH_VERSION=2.10.0"
 	@echo "  REMOTE_TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128"
 	@echo "  FACE_PROCESSING_MODEL_PATH=/abs/path/face_landmarker_v2_with_blendshapes.task"
+	@echo "  FACE_PROCESSING_REF=$(FACE_PROCESSING_REF)"
 	@echo "  FACECLIP_MONITOR_NAME=remote-3090 # optional override if different from REMOTE_NAME"
 	@echo "  OFFICIAL_SYNCNET_CKPT=/abs/path/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_URL=https://drive.google.com/open?id=..."
@@ -214,7 +196,9 @@ help:
 	@echo "  DATASET_RELOAD=1  # ignore merge manifest and revisit all archives"
 	@echo "  SYNCNET_CONFIG=configs/syncnet_cuda3090_medium.yaml"
 	@echo "  GENERATOR_CONFIG=configs/lipsync_cuda3090_hdtf_talkvid.yaml"
-	@echo "  GENERATOR_MIRROR_GAN_CONFIG=configs/generator_mirror_gan_hdtf_talkvid.yaml"
+	@echo "  GENERATOR_MIRROR_GAN_CONFIG=configs/generator_mirror_gan_tiltaware_dataset_adaptive_20260414.yaml"
+	@echo "  GENERATOR_MIRROR_GAN_SYNCNET=output/syncnet_current_best_20260428/syncnet_best_our_eval.pth"
+	@echo "  GENERATOR_MIRROR_GAN_EVAL_SEED=20260408"
 	@echo "  SYNCNET_TEACHER=../../models/wav2lip/checkpoints/lipsync_expert.pth"
 	@echo "  OFFICIAL_SYNCNET_PATH=../../models/wav2lip/checkpoints/lipsync_expert.pth"
 	@echo "  SYNCNET_RESUME=/abs/or/rel/checkpoint.pth"
@@ -230,9 +214,6 @@ help:
 	@echo "  BENCH_AUDIO=/abs/path/audio.mp3"
 	@echo "  BENCH_CHECKPOINT=/abs/path/Wav2Lip-SD-GAN.pt"
 	@echo "  BENCH_FACE_LANDMARKER_PATH=/abs/path/face_landmarker_v2_with_blendshapes.task"
-	@echo "  PUBLISH_CHECKPOINT=output/<run>/generator/generator_epoch000.pth"
-	@echo "  PUBLISH_FACE_LIST=\"/abs/face1.mp4 /abs/face2.mp4\""
-	@echo "  PUBLISH_AUDIO=/abs/path/short_4s.mp3"
 	@echo "  ARTIFACTS_OUTPUT_DIR=training/output/<run_name>"
 	@echo "  ARTIFACTS_RUN_KIND=syncnet|generator|pipeline|smoke|auto"
 	@echo "  ARTIFACTS_RUN_NAME=<drive_subdir_name>"
@@ -343,6 +324,11 @@ remote-server-setup:
 		DEBIAN_FRONTEND=noninteractive \$$sudo_cmd apt-get install -y ffmpeg libsndfile1 rsync rclone git make python3-pip; \
 		$(REMOTE_PYTHON) -m pip install --upgrade pip; \
 		$(REMOTE_PYTHON) -m pip install --no-cache-dir -r '$(REMOTE_ROOT)/training/requirements-server.txt'; \
+		face_processing_root='$(FACE_PROCESSING_REMOTE_ROOT)'; \
+		rm -rf \"\$$face_processing_root\"; \
+		git clone --filter=blob:none '$(FACE_PROCESSING_GIT_URL)' \"\$$face_processing_root\"; \
+		git -C \"\$$face_processing_root\" checkout --detach '$(FACE_PROCESSING_REF)'; \
+		test \"\$$(git -C \"\$$face_processing_root\" rev-parse HEAD)\" = '$(FACE_PROCESSING_REF)'; \
 		if [ '$(REMOTE_ENSURE_TORCH_CUDA)' = '1' ]; then \
 			$(REMOTE_PYTHON) '$(REMOTE_ROOT)/training/scripts/ensure_torch_cuda_compat.py' \
 				--torch-version '$(REMOTE_TORCH_VERSION)' \
@@ -371,15 +357,6 @@ remote-rclone-config:
 		rclone listremotes >/dev/null; \
 	"
 	@echo "remote-rclone-config complete: $(REMOTE):$(REMOTE_RCLONE_CONFIG)"
-
-remote-prewarm-sfd:
-	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
-		set -euo pipefail; \
-		cd '$(REMOTE_ROOT)/training'; \
-		PYTHONPATH='$(REMOTE_ROOT)/models/official_syncnet:$(REMOTE_ROOT)/training:$(REMOTE_ROOT)' \
-			$(REMOTE_PYTHON) -c \"from face_detection import FaceAlignment, LandmarksType; FaceAlignment(LandmarksType._2D, device='cpu', flip_input=False, face_detector='sfd'); print('SFD checkpoint cached')\"; \
-	"
-	@echo "remote-prewarm-sfd complete: $(REMOTE):$(REMOTE_ROOT)"
 
 remote-fetch-official-syncnet:
 	ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$(PORT)" "$(REMOTE)" "\
@@ -448,8 +425,7 @@ remote-bootstrap-process-lazy: remote-sync-code remote-server-setup remote-rclon
 	-@$(MAKE) remote-observe-system REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)" SYSTEM_WATCH_INTERVAL="$(SYSTEM_WATCH_INTERVAL)"
 	@echo "remote-bootstrap-process-lazy complete: $(REMOTE):$(REMOTE_ROOT)"
 
-remote-bootstrap-benchmarks: remote-sync-code remote-server-setup remote-fetch-official-syncnet remote-fetch-face-processing-model
-	-@$(MAKE) remote-prewarm-sfd REMOTE="$(REMOTE)" PORT="$(PORT)" REMOTE_ROOT="$(REMOTE_ROOT)" REMOTE_PYTHON="$(REMOTE_PYTHON)"
+remote-bootstrap-benchmarks: remote-sync-code remote-server-setup remote-fetch-face-processing-model
 	@echo "remote-bootstrap-benchmarks complete: $(REMOTE):$(REMOTE_ROOT)"
 
 remote-docker-host-setup:
@@ -863,7 +839,8 @@ train-generator:
 train-generator-mirror-gan:
 	cd $(TRAINING_ROOT) && $(PYTHON) scripts/train_generator_mirror_gan.py \
 		--config $(GENERATOR_MIRROR_GAN_CONFIG) \
-		--syncnet $(SYNCNET_TEACHER) \
+		--syncnet $(GENERATOR_MIRROR_GAN_SYNCNET) \
+		--eval-seed $(GENERATOR_MIRROR_GAN_EVAL_SEED) \
 		$(if $(GENERATOR_MIRROR_GAN_RESUME),--checkpoint-path $(GENERATOR_MIRROR_GAN_RESUME),) \
 		$(if $(GENERATOR_MIRROR_GAN_DISC_RESUME),--disc-checkpoint-path $(GENERATOR_MIRROR_GAN_DISC_RESUME),) \
 		$(if $(SPEAKER_LIST),--speaker-list $(SPEAKER_LIST),) \
@@ -925,7 +902,7 @@ watch-syncnet-generator:
 		$(if $(GENERATOR_LAZY_CACHE_ROOT),--generator-lazy-cache-root $(GENERATOR_LAZY_CACHE_ROOT),) \
 		--poll-seconds $(WATCH_POLL_SECONDS)
 
-bench-wav2lip:
+bench-lipsync:
 	@if [ -z "$(BENCH_FACE)" ]; then \
 		echo "BENCH_FACE is required, e.g. /abs/path/portrait_avatar.mp4"; \
 		exit 1; \
@@ -938,35 +915,7 @@ bench-wav2lip:
 		echo "BENCH_CHECKPOINT is required, e.g. /abs/path/Wav2Lip-SD-GAN.pt"; \
 		exit 1; \
 	fi
-	cd $(REPO_ROOT) && $(PYTHON) training/scripts/run_official_wav2lip_benchmark.py \
-		--face "$(BENCH_FACE)" \
-		--audio "$(BENCH_AUDIO)" \
-		--checkpoint "$(BENCH_CHECKPOINT)" \
-		--device "$(BENCH_DEVICE)" \
-		--detector_device "$(BENCH_DETECTOR_DEVICE)" \
-		--batch_size $(BENCH_BATCH_SIZE) \
-		--face_det_batch_size $(BENCH_FACE_DET_BATCH_SIZE) \
-		--pads $(BENCH_PADS) \
-		--resize_factor $(BENCH_RESIZE_FACTOR) \
-		$(if $(BENCH_OUTFILE),--outfile "$(BENCH_OUTFILE)",) \
-		$(if $(BENCH_S3FD_PATH),--s3fd_path "$(BENCH_S3FD_PATH)",) \
-		$(if $(filter 1 true yes,$(BENCH_STATIC)),--static,) \
-		$(if $(filter 1 true yes,$(BENCH_NOSMOOTH)),--nosmooth,)
-
-bench-tilt-aware-x96:
-	@if [ -z "$(BENCH_FACE)" ]; then \
-		echo "BENCH_FACE is required, e.g. /abs/path/portrait_avatar.mp4"; \
-		exit 1; \
-	fi
-	@if [ -z "$(BENCH_AUDIO)" ]; then \
-		echo "BENCH_AUDIO is required, e.g. /abs/path/short_4s.mp3"; \
-		exit 1; \
-	fi
-	@if [ -z "$(BENCH_CHECKPOINT)" ]; then \
-		echo "BENCH_CHECKPOINT is required, e.g. /abs/path/Wav2Lip-SD-GAN.pt"; \
-		exit 1; \
-	fi
-	cd $(REPO_ROOT) && $(PYTHON) training/scripts/run_tilt_aware_x96_benchmark.py \
+	cd $(REPO_ROOT) && $(PYTHON) training/scripts/run_lipsync_benchmark.py \
 		--face "$(BENCH_FACE)" \
 		--audio "$(BENCH_AUDIO)" \
 		--checkpoint "$(BENCH_CHECKPOINT)" \
@@ -978,35 +927,6 @@ bench-tilt-aware-x96:
 		$(if $(BENCH_FACE_LANDMARKER_PATH),--face_landmarker_path "$(BENCH_FACE_LANDMARKER_PATH)",) \
 		$(if $(filter 1 true yes,$(BENCH_STATIC)),--static,) \
 		$(if $(filter 1 true yes,$(BENCH_KEEP_INTERMEDIATES)),--keep_intermediates,)
-
-publish-checkpoint-benchmark:
-	@if [ -z "$(PUBLISH_CHECKPOINT)" ]; then \
-		echo "PUBLISH_CHECKPOINT is required, e.g. output/<run>/generator/generator_epoch000.pth"; \
-		exit 1; \
-	fi
-	@if [ -z "$(PUBLISH_AUDIO)" ]; then \
-		echo "PUBLISH_AUDIO is required, e.g. /abs/path/short_4s.mp3"; \
-		exit 1; \
-	fi
-	@if [ -z "$(PUBLISH_FACE_LIST)" ]; then \
-		echo "PUBLISH_FACE_LIST is required, e.g. \"/abs/portrait_avatar.mp4 /abs/portrait_rama.mp4\""; \
-		exit 1; \
-	fi
-	cd $(TRAINING_ROOT) && $(PYTHON) scripts/publish_checkpoint_benchmark.py \
-		--checkpoint "$(PUBLISH_CHECKPOINT)" \
-		--audio "$(PUBLISH_AUDIO)" \
-		$(foreach f,$(PUBLISH_FACE_LIST),--face "$(f)") \
-		--remote "$(PUBLISH_REMOTE)" \
-		--drive-root-folder-id "$(PUBLISH_DRIVE_ROOT_ID)" \
-		--device "$(PUBLISH_DEVICE)" \
-		--detector-device "$(PUBLISH_DETECTOR_DEVICE)" \
-		--batch-size $(PUBLISH_BATCH_SIZE) \
-		--face-det-batch-size $(PUBLISH_FACE_DET_BATCH_SIZE) \
-		$(if $(PUBLISH_INFER_ONLY_OUT),--infer-only-out "$(PUBLISH_INFER_ONLY_OUT)",) \
-		$(if $(PUBLISH_RUN_NAME),--run-name "$(PUBLISH_RUN_NAME)",) \
-		$(if $(PUBLISH_OUTPUT_DIR),--output-dir "$(PUBLISH_OUTPUT_DIR)",) \
-		$(if $(PUBLISH_S3FD_PATH),--s3fd-path "$(PUBLISH_S3FD_PATH)",) \
-		$(if $(filter 1 true yes,$(PUBLISH_SKIP_UPLOAD)),--skip-upload,)
 
 upload-training-artifacts:
 	@if [ -z "$(ARTIFACTS_OUTPUT_DIR)" ]; then \

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Batch-export raw videos into ranked face segments using the vendored
+Batch-export raw videos into ranked face segments using the external
 `face_processing` pipeline.
 
 Output layout:
@@ -179,6 +179,7 @@ def build_face_processing_config(config_path: Path, config: dict[str, Any], outp
     detection_mapping = dict(get_mapping(config, "face_processing", "detection"))
     bad_frame_mapping = dict(get_mapping(config, "face_processing", "bad_frame"))
     ranking_mapping = dict(get_mapping(config, "face_processing", "ranking"))
+    stabilization_mapping = dict(get_mapping(config, "face_processing", "stabilization", default={}))
     export_mapping = dict(get_mapping(config, "face_processing", "export"))
 
     model_path = resolve_repo_path(REPO_ROOT, get_str(config, "face_processing", "detection", "model_path"))
@@ -209,6 +210,8 @@ def build_face_processing_config(config_path: Path, config: dict[str, Any], outp
     _apply_mapping(pipeline_cfg.detection, detection_mapping, "face_processing.detection")
     _apply_mapping(pipeline_cfg.bad_frame, bad_frame_mapping, "face_processing.bad_frame")
     _apply_mapping(pipeline_cfg.ranking, ranking_mapping, "face_processing.ranking")
+    if stabilization_mapping and hasattr(pipeline_cfg, "stabilization"):
+        _apply_mapping(pipeline_cfg.stabilization, stabilization_mapping, "face_processing.stabilization")
     _apply_mapping(pipeline_cfg.export, export_mapping, "face_processing.export")
 
     pipeline_cfg.save_frame_log = get_bool(root_mapping, "save_frame_log")

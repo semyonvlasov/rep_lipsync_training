@@ -717,9 +717,9 @@ def resolve_training_path(raw_path: str | None) -> str | None:
 def resolve_benchmark_cfg(cfg: dict) -> dict:
     section = dict(cfg.get("benchmark") or {})
     faces = [resolve_training_path(item) for item in section.get("faces", [])]
-    script = str(section.get("script", "run_official_wav2lip_benchmark.py")).strip()
+    script = str(section.get("script", "run_lipsync_benchmark.py")).strip()
     if not script:
-        script = "run_official_wav2lip_benchmark.py"
+        script = "run_lipsync_benchmark.py"
     script_path = Path(script)
     if not script_path.is_absolute():
         script_path = Path(TRAINING_ROOT) / "scripts" / script_path.name
@@ -729,11 +729,9 @@ def resolve_benchmark_cfg(cfg: dict) -> dict:
         "audio": resolve_training_path(section.get("audio")),
         "faces": [item for item in faces if item],
         "device": str(section.get("device", "cuda")),
-        "detector_device": str(section.get("detector_device", "cuda")),
         "landmarker_device": str(section.get("landmarker_device", "cpu")),
         "batch_size": int(section.get("batch_size", 16)),
-        "face_det_batch_size": int(section.get("face_det_batch_size", 4)),
-        "s3fd_path": resolve_training_path(section.get("s3fd_path")),
+        "face_landmarker_path": resolve_training_path(section.get("face_landmarker_path")),
         "cache_root": resolve_training_path(section.get("cache_root")),
         "no_cache": bool(section.get("no_cache", False)),
     }
@@ -795,7 +793,6 @@ def run_checkpoint_benchmark(
     benchmark_dir = artifact_dir / "benchmark"
     benchmark_dir.mkdir(parents=True, exist_ok=True)
     benchmark_script = Path(benchmark_cfg["script"])
-    benchmark_is_tilt_aware = benchmark_script.name == "run_tilt_aware_x96_benchmark.py"
     outputs = []
     for face_path in benchmark_cfg["faces"]:
         out_path = benchmark_dir / benchmark_output_name(face_path, benchmark_cfg["audio"], checkpoint_path)
@@ -814,20 +811,11 @@ def run_checkpoint_benchmark(
             benchmark_cfg["device"],
             "--batch_size",
             str(benchmark_cfg["batch_size"]),
+            "--landmarker_device",
+            benchmark_cfg["landmarker_device"],
         ]
-        if benchmark_is_tilt_aware:
-            cmd.extend(["--landmarker_device", benchmark_cfg["landmarker_device"]])
-        else:
-            cmd.extend(
-                [
-                    "--detector_device",
-                    benchmark_cfg["detector_device"],
-                    "--face_det_batch_size",
-                    str(benchmark_cfg["face_det_batch_size"]),
-                ]
-            )
-        if benchmark_cfg["s3fd_path"] and not benchmark_is_tilt_aware:
-            cmd.extend(["--s3fd_path", str(benchmark_cfg["s3fd_path"])])
+        if benchmark_cfg["face_landmarker_path"]:
+            cmd.extend(["--face_landmarker_path", str(benchmark_cfg["face_landmarker_path"])])
         if benchmark_cfg["cache_root"]:
             cmd.extend(["--cache_root", str(benchmark_cfg["cache_root"])])
         if benchmark_cfg["no_cache"]:
@@ -1826,6 +1814,7 @@ def main():
     parser.add_argument("--disc-checkpoint-path", default=None, help="Resume quality discriminator from official-style checkpoint")
     parser.add_argument("--speaker-list", default=None, help="Optional newline-separated speaker snapshot")
     parser.add_argument("--val-speaker-list", default=None, help="Optional newline-separated validation snapshot")
+    parser.add_argument("--eval-seed", type=int, default=None, help="Fixed validation sampling seed")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -1840,6 +1829,8 @@ def main():
         raise SystemExit(f"generator_mirror_gan requires model.mel_steps={syncnet_mel_step_size}")
 
     cfg_mirror = resolve_mirror_cfg(cfg)
+    if args.eval_seed is not None:
+        cfg_mirror["eval_seed"] = int(args.eval_seed)
     cfg_mirror["benchmark_cfg"] = resolve_benchmark_cfg(cfg)
     cfg_mirror["checkpoint_publish_cfg"] = resolve_checkpoint_publish_cfg(cfg)
     device_name = cfg["training"]["device"]

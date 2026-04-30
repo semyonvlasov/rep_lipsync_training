@@ -6,8 +6,12 @@ ARG TORCHVISION_VERSION=0.25.0
 ARG TORCHAUDIO_VERSION=2.10.0
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
 ARG RCLONE_RELEASE=1.73.3
+ARG FACE_PROCESSING_GIT_URL=https://github.com/semyonvlasov/face_processing.git
+ARG FACE_PROCESSING_REF=4223501956614ccd878e398830c8d5d9e7fcc317
 
 ENV LIPSYNC_REPO_ROOT=/opt/lipsync \
+    FACE_PROCESSING_REPO_ROOT=/opt/face_processing \
+    PYTHONPATH=/opt/face_processing:/opt/lipsync:/opt/lipsync/training \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     NVIDIA_VISIBLE_DEVICES=all \
@@ -39,6 +43,10 @@ RUN curl -fsSL \
     && install -m 0755 "/tmp/rclone-v${RCLONE_RELEASE}-linux-amd64/rclone" /usr/local/bin/rclone \
     && rm -rf /tmp/rclone.zip "/tmp/rclone-v${RCLONE_RELEASE}-linux-amd64" \
     && rclone version
+
+RUN git clone --filter=blob:none "${FACE_PROCESSING_GIT_URL}" "${FACE_PROCESSING_REPO_ROOT}" \
+    && git -C "${FACE_PROCESSING_REPO_ROOT}" checkout --detach "${FACE_PROCESSING_REF}" \
+    && test "$(git -C "${FACE_PROCESSING_REPO_ROOT}" rev-parse HEAD)" = "${FACE_PROCESSING_REF}"
 
 WORKDIR /tmp/bootstrap
 COPY training/requirements-server.txt /tmp/bootstrap/requirements-server.txt
