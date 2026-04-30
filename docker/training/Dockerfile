@@ -23,7 +23,9 @@ RUN apt-get update \
         curl \
         ffmpeg \
         git \
+        libegl1 \
         libgl1 \
+        libgles2 \
         libglib2.0-0 \
         libgomp1 \
         libsndfile1 \
@@ -65,6 +67,7 @@ COPY . /opt/lipsync
 RUN chmod +x /opt/lipsync/docker/training/entrypoint.sh /opt/lipsync/training/scripts/lipsyncctl.py \
     && ln -sf /opt/lipsync/training/scripts/lipsyncctl.py /usr/local/bin/lipsyncctl \
     && mkdir -p /workspace/data /workspace/output /workspace/cache \
+    && python3 -c "from mediapipe.tasks import python; from mediapipe.tasks.python import vision; opts = vision.FaceLandmarkerOptions(base_options=python.BaseOptions(model_asset_path='/opt/lipsync/models/face_processing/face_landmarker_v2_with_blendshapes.task'), running_mode=vision.RunningMode.IMAGE); detector = vision.FaceLandmarker.create_from_options(opts); detector.close()" \
     && lipsyncctl list-artifacts >/dev/null
 
 ENTRYPOINT ["/opt/lipsync/docker/training/entrypoint.sh"]
