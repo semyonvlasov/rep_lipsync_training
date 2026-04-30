@@ -85,10 +85,14 @@ generator_mirror_gan:
 benchmark:
   enabled: true
   script: run_lipsync_benchmark.py
-  audio: output/benchmark_samples/short_4s.mp3
+  audios:
+    - output/benchmark_samples/audio/2026_02_02_170415_bot_encoded_pad0p5_1p0.mp3
+    - output/benchmark_samples/audio/2026_02_02_170743_bot_encoded_pad0p5_1p0.mp3
+    - output/benchmark_samples/audio/2026_02_02_170811_bot_encoded_pad0p5_1p0.mp3
+    - output/benchmark_samples/audio/2026_02_02_170840_bot_encoded_pad0p5_1p0.mp3
   faces:
-    - output/benchmark_samples/portrait_avatar.mp4
-    - output/benchmark_samples/portrait_rama.mp4
+    - output/benchmark_samples/video/elena_700.mp4
+    - output/benchmark_samples/video/rama_700.mp4
   device: cuda
   landmarker_device: cpu
   batch_size: 16

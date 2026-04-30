@@ -483,14 +483,17 @@ def build_generator_benchmark_cfg(cfg):
         return None
 
     faces = [resolve_training_path(path) for path in bench_cfg.get("faces", []) if path]
-    audio = resolve_training_path(bench_cfg.get("audio"))
-    if not faces or not audio:
+    audio_values = bench_cfg.get("audios")
+    if audio_values is None:
+        audio_values = [bench_cfg.get("audio")]
+    audios = [resolve_training_path(path) for path in audio_values if path]
+    if not faces or not audios:
         return {
             "enabled": False,
             "reason": "missing face/audio benchmark sample paths in config",
         }
 
-    missing = [path for path in [audio, *faces] if not os.path.exists(path)]
+    missing = [path for path in [*audios, *faces] if not os.path.exists(path)]
     if missing:
         return {
             "enabled": False,
@@ -500,7 +503,8 @@ def build_generator_benchmark_cfg(cfg):
     return {
         "enabled": True,
         "faces": faces,
-        "audio": audio,
+        "audio": audios[0],
+        "audios": audios,
         "device": bench_cfg.get("device", "cuda"),
         "landmarker_device": bench_cfg.get("landmarker_device", "cpu"),
         "batch_size": int(bench_cfg.get("batch_size", 16)),
@@ -529,44 +533,47 @@ def run_generator_checkpoint_benchmark(checkpoint_path, benchmark_output_dir, be
     with open(benchmark_log_path, "a", encoding="utf-8") as handle:
         handle.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S %Z')} {label} ===\n")
         for face_path in benchmark_cfg["faces"]:
-            out_path = os.path.join(
-                benchmark_output_dir,
-                benchmark_output_name(face_path, benchmark_cfg["audio"], checkpoint_path),
-            )
-            cmd = [
-                sys.executable,
-                benchmark_script,
-                "--checkpoint",
-                checkpoint_path,
-                "--face",
-                face_path,
-                "--audio",
-                benchmark_cfg["audio"],
-                "--outfile",
-                out_path,
-                "--device",
-                benchmark_cfg["device"],
-                "--landmarker_device",
-                benchmark_cfg["landmarker_device"],
-                "--batch_size",
-                str(benchmark_cfg["batch_size"]),
-            ]
-            if benchmark_cfg["face_landmarker_path"]:
-                cmd.extend(["--face_landmarker_path", benchmark_cfg["face_landmarker_path"]])
-            if benchmark_cfg["cache_root"]:
-                cmd.extend(["--cache_root", benchmark_cfg["cache_root"]])
-            if benchmark_cfg["no_cache"]:
-                cmd.append("--no_cache")
+            for audio_path in benchmark_cfg["audios"]:
+                out_path = os.path.join(
+                    benchmark_output_dir,
+                    benchmark_output_name(face_path, audio_path, checkpoint_path),
+                )
+                cmd = [
+                    sys.executable,
+                    benchmark_script,
+                    "--checkpoint",
+                    checkpoint_path,
+                    "--face",
+                    face_path,
+                    "--audio",
+                    audio_path,
+                    "--outfile",
+                    out_path,
+                    "--device",
+                    benchmark_cfg["device"],
+                    "--landmarker_device",
+                    benchmark_cfg["landmarker_device"],
+                    "--batch_size",
+                    str(benchmark_cfg["batch_size"]),
+                ]
+                if benchmark_cfg["face_landmarker_path"]:
+                    cmd.extend(["--face_landmarker_path", benchmark_cfg["face_landmarker_path"]])
+                if benchmark_cfg["cache_root"]:
+                    cmd.extend(["--cache_root", benchmark_cfg["cache_root"]])
+                if benchmark_cfg["no_cache"]:
+                    cmd.append("--no_cache")
 
-            proc = subprocess.run(
-                cmd,
-                cwd=REPO_ROOT,
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            if proc.returncode != 0:
-                ok = False
+                proc = subprocess.run(
+                    cmd,
+                    cwd=REPO_ROOT,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                if proc.returncode != 0:
+                    ok = False
+                    break
+            if not ok:
                 break
     if not ok:
         log(
@@ -704,7 +711,7 @@ def main():
     else:
         log(
             "Benchmark-on-eval: enabled "
-            f"(faces={len(benchmark_cfg['faces'])}, audio={benchmark_cfg['audio']}, "
+            f"(faces={len(benchmark_cfg['faces'])}, audios={len(benchmark_cfg['audios'])}, "
             f"latest_dir={benchmark_cfg['latest_output_dirname']}, "
             f"best_dir={benchmark_cfg['best_output_dirname']})"
         )

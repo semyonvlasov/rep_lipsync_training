@@ -144,13 +144,26 @@ def runtime_env(args: argparse.Namespace) -> dict[str, str]:
     return env
 
 
+def bundled_benchmark_audios(bundled: dict[str, Any]) -> list[dict[str, Any]]:
+    audios: list[dict[str, Any]] = []
+    legacy_audio = bundled.get("benchmark_audio") or {}
+    if legacy_audio.get("path"):
+        audios.append(legacy_audio)
+    audios.extend(item for item in bundled.get("benchmark_audios") or [] if item.get("path"))
+    return audios
+
+
+def bundled_benchmark_faces(bundled: dict[str, Any]) -> list[dict[str, Any]]:
+    return [item for item in bundled.get("benchmark_faces") or [] if item.get("path")]
+
+
 def install_bundled_assets(cfg: dict[str, Any], repo_root: Path, *, dry_run: bool = False) -> None:
     bundled = cfg.get("bundled_assets") or {}
     copies: list[tuple[str, str]] = []
-    audio = bundled.get("benchmark_audio") or {}
-    if audio.get("install_path"):
-        copies.append((audio["path"], audio["install_path"]))
-    for face in bundled.get("benchmark_faces") or []:
+    for audio in bundled_benchmark_audios(bundled):
+        if audio.get("install_path"):
+            copies.append((audio["path"], audio["install_path"]))
+    for face in bundled_benchmark_faces(bundled):
         if face.get("install_path"):
             copies.append((face["path"], face["install_path"]))
 
@@ -256,10 +269,10 @@ def command_doctor(args: argparse.Namespace) -> int:
         failures += 1
 
     bundled = cfg.get("bundled_assets") or {}
-    for item in [bundled.get("benchmark_audio") or {}, bundled.get("face_landmarker") or {}]:
+    for item in [*bundled_benchmark_audios(bundled), bundled.get("face_landmarker") or {}]:
         if item.get("path"):
             failures += 0 if verify_file(repo_path(repo_root, item["path"]), item.get("sha256"), item.get("size_bytes")) else 1
-    for face in bundled.get("benchmark_faces") or []:
+    for face in bundled_benchmark_faces(bundled):
         failures += 0 if verify_file(repo_path(repo_root, face["path"]), face.get("sha256"), face.get("size_bytes")) else 1
 
     if args.require_prepared:
@@ -710,8 +723,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     benchmark = subparsers.add_parser("benchmark", help="Run the tilt-aware x96 benchmark")
     add_common_runtime_args(benchmark)
-    benchmark.add_argument("--face", default="assets/benchmark/portrait_avatar.mp4")
-    benchmark.add_argument("--audio", default="assets/benchmark/short_4s.mp3")
+    benchmark.add_argument("--face", default="assets/benchmark/video/elena_700.mp4")
+    benchmark.add_argument("--audio", default="assets/benchmark/audio/2026_02_02_170415_bot_encoded_pad0p5_1p0.mp3")
     benchmark.add_argument("--checkpoint", default=None)
     benchmark.add_argument("--outfile", default=None)
     benchmark.add_argument("--device", default="auto", choices=("auto", "cpu", "mps", "cuda"))

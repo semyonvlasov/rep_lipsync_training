@@ -717,6 +717,10 @@ def resolve_training_path(raw_path: str | None) -> str | None:
 def resolve_benchmark_cfg(cfg: dict) -> dict:
     section = dict(cfg.get("benchmark") or {})
     faces = [resolve_training_path(item) for item in section.get("faces", [])]
+    audio_values = section.get("audios")
+    if audio_values is None:
+        audio_values = [section.get("audio")]
+    audios = [resolve_training_path(item) for item in audio_values if item]
     script = str(section.get("script", "run_lipsync_benchmark.py")).strip()
     if not script:
         script = "run_lipsync_benchmark.py"
@@ -726,7 +730,8 @@ def resolve_benchmark_cfg(cfg: dict) -> dict:
     return {
         "enabled": bool(section.get("enabled", False)),
         "script": str(script_path),
-        "audio": resolve_training_path(section.get("audio")),
+        "audio": audios[0] if audios else None,
+        "audios": audios,
         "faces": [item for item in faces if item],
         "device": str(section.get("device", "cuda")),
         "landmarker_device": str(section.get("landmarker_device", "cpu")),
@@ -786,7 +791,7 @@ def run_checkpoint_benchmark(
 ) -> list[dict]:
     if not benchmark_cfg["enabled"]:
         return []
-    if not benchmark_cfg["audio"] or not benchmark_cfg["faces"]:
+    if not benchmark_cfg["audios"] or not benchmark_cfg["faces"]:
         log("Checkpoint benchmark disabled for this step: benchmark audio/faces not configured")
         return []
 
@@ -795,40 +800,41 @@ def run_checkpoint_benchmark(
     benchmark_script = Path(benchmark_cfg["script"])
     outputs = []
     for face_path in benchmark_cfg["faces"]:
-        out_path = benchmark_dir / benchmark_output_name(face_path, benchmark_cfg["audio"], checkpoint_path)
-        cmd = [
-            sys.executable,
-            str(benchmark_script),
-            "--face",
-            str(face_path),
-            "--audio",
-            str(benchmark_cfg["audio"]),
-            "--checkpoint",
-            str(checkpoint_path),
-            "--outfile",
-            str(out_path),
-            "--device",
-            benchmark_cfg["device"],
-            "--batch_size",
-            str(benchmark_cfg["batch_size"]),
-            "--landmarker_device",
-            benchmark_cfg["landmarker_device"],
-        ]
-        if benchmark_cfg["face_landmarker_path"]:
-            cmd.extend(["--face_landmarker_path", str(benchmark_cfg["face_landmarker_path"])])
-        if benchmark_cfg["cache_root"]:
-            cmd.extend(["--cache_root", str(benchmark_cfg["cache_root"])])
-        if benchmark_cfg["no_cache"]:
-            cmd.append("--no_cache")
-        run_logged(cmd, prefix="[CheckpointBench]")
-        outputs.append(
-            {
-                "face": str(face_path),
-                "audio": str(benchmark_cfg["audio"]),
-                "output": str(out_path),
-                "size_bytes": out_path.stat().st_size,
-            }
-        )
+        for audio_path in benchmark_cfg["audios"]:
+            out_path = benchmark_dir / benchmark_output_name(face_path, audio_path, checkpoint_path)
+            cmd = [
+                sys.executable,
+                str(benchmark_script),
+                "--face",
+                str(face_path),
+                "--audio",
+                str(audio_path),
+                "--checkpoint",
+                str(checkpoint_path),
+                "--outfile",
+                str(out_path),
+                "--device",
+                benchmark_cfg["device"],
+                "--batch_size",
+                str(benchmark_cfg["batch_size"]),
+                "--landmarker_device",
+                benchmark_cfg["landmarker_device"],
+            ]
+            if benchmark_cfg["face_landmarker_path"]:
+                cmd.extend(["--face_landmarker_path", str(benchmark_cfg["face_landmarker_path"])])
+            if benchmark_cfg["cache_root"]:
+                cmd.extend(["--cache_root", str(benchmark_cfg["cache_root"])])
+            if benchmark_cfg["no_cache"]:
+                cmd.append("--no_cache")
+            run_logged(cmd, prefix="[CheckpointBench]")
+            outputs.append(
+                {
+                    "face": str(face_path),
+                    "audio": str(audio_path),
+                    "output": str(out_path),
+                    "size_bytes": out_path.stat().st_size,
+                }
+            )
     return outputs
 
 
@@ -1972,7 +1978,7 @@ def main():
         "Benchmark publish: "
         f"enabled={cfg_mirror['benchmark_cfg']['enabled']} "
         f"faces={len(cfg_mirror['benchmark_cfg']['faces'])} "
-        f"audio={cfg_mirror['benchmark_cfg']['audio']}"
+        f"audios={len(cfg_mirror['benchmark_cfg']['audios'])}"
     )
     log(
         "Eval sampling: "

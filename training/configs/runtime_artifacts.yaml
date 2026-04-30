@@ -94,20 +94,34 @@ current_best_checkpoints:
 
 bundled_assets:
   benchmark_audio:
-    path: "assets/benchmark/short_4s.mp3"
-    install_path: "training/output/benchmark_samples/short_4s.mp3"
-    sha256: "0876841b1aff7c2e2f924c33d9503d56d172cd04aa9afebefd8c068c7b6c1929"
-    size_bytes: 16460
+    path: "assets/benchmark/audio/2026_02_02_170415_bot_encoded_pad0p5_1p0.mp3"
+    install_path: "training/output/benchmark_samples/audio/2026_02_02_170415_bot_encoded_pad0p5_1p0.mp3"
+    sha256: "204748dfe34acddf1bad3de75760697f71e0b982f635fd278839a6571d827a09"
+    size_bytes: 46773
+
+  benchmark_audios:
+    - path: "assets/benchmark/audio/2026_02_02_170743_bot_encoded_pad0p5_1p0.mp3"
+      install_path: "training/output/benchmark_samples/audio/2026_02_02_170743_bot_encoded_pad0p5_1p0.mp3"
+      sha256: "3dca82d93bff83c84e7493fb36960b25ac2fc370f208359016427441b53196de"
+      size_bytes: 71037
+    - path: "assets/benchmark/audio/2026_02_02_170811_bot_encoded_pad0p5_1p0.mp3"
+      install_path: "training/output/benchmark_samples/audio/2026_02_02_170811_bot_encoded_pad0p5_1p0.mp3"
+      sha256: "9fe55188a9c41ebe9f1ca00f9bfdeae8fb03d3d574a87c0dec3e370fc2050927"
+      size_bytes: 70413
+    - path: "assets/benchmark/audio/2026_02_02_170840_bot_encoded_pad0p5_1p0.mp3"
+      install_path: "training/output/benchmark_samples/audio/2026_02_02_170840_bot_encoded_pad0p5_1p0.mp3"
+      sha256: "65553c2ae7eb7a554f5acee4db280a2ed0e839a7889d014c459325ebbf79d186"
+      size_bytes: 65493
 
   benchmark_faces:
-    - path: "assets/benchmark/portrait_avatar.mp4"
-      install_path: "training/output/benchmark_samples/portrait_avatar.mp4"
-      sha256: "2b7a25332625e13e37de98cbd70e020e0fa8b5938b063506489d0704c1204871"
-      size_bytes: 938032
-    - path: "assets/benchmark/portrait_rama.mp4"
-      install_path: "training/output/benchmark_samples/portrait_rama.mp4"
-      sha256: "337753794cdd3702765a358ba8306f5d99e23f275906a0fe0f547b694ec3196c"
-      size_bytes: 1166151
+    - path: "assets/benchmark/video/elena_700.mp4"
+      install_path: "training/output/benchmark_samples/video/elena_700.mp4"
+      sha256: "9c797d9670fac74aeabdb70d98cc81ee520221c69f964ae9fd6db3159f6772bc"
+      size_bytes: 3777259
+    - path: "assets/benchmark/video/rama_700.mp4"
+      install_path: "training/output/benchmark_samples/video/rama_700.mp4"
+      sha256: "63e2d7df254f36d02e9de33f394775a21b75dfd3375031b84eccf774788af75c"
+      size_bytes: 4014731
 
   face_landmarker:
     path: "models/face_processing/face_landmarker_v2_with_blendshapes.task"
