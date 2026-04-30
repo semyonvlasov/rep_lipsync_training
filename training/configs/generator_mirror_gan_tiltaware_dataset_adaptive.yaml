@@ -100,11 +100,11 @@ checkpoint_publish:
   remote: "gdrive:"
   drive_root_folder_id: 1y1P-LI3YTPV65zpHXMSrNYsykN2-s5Pv
   remote_dir_prefix: checkpoints
-  experiment_name: generator_mirror_gan_tiltaware_dataset_adaptive_20260414
+  experiment_name: generator_mirror_gan_tiltaware_dataset_adaptive
 
 data:
-  hdtf_root: data/hdtf/processed_tilt_aware_20260414
-  talkvid_root: data/talkvid/processed_tilt_aware_20260414
+  hdtf_root: data/hdtf/processed
+  talkvid_root: data/talkvid/processed
   fps: 25
   num_workers: 8
   persistent_workers: true
@@ -129,4 +129,4 @@ training:
   gradient_clip: 0.0
   save_every: 1
   sample_every: 1
-  output_dir: output/generator_mirror_gan_tiltaware_dataset_adaptive_20260414
+  output_dir: output/generator_mirror_gan_tiltaware_dataset_adaptive

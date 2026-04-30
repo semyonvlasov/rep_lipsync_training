@@ -1,4 +1,5 @@
 gdown
+huggingface_hub[cli]
 librosa
 mediapipe>=0.10.9
 numpy<2

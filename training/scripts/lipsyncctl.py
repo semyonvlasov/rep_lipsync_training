@@ -25,6 +25,12 @@ DEFAULT_RCLONE_CONFIG = Path("/run/secrets/rclone.conf")
 DEFAULT_DATASET_FOLDER_ID = "1D6vtNpRmZabqnlW4598X6lqgFETZ9RvO"
 DEFAULT_SYNC_ALIGNMENT_REGISTRY_PATH = "output/sync_alignment/sync_alignment_manifest.jsonl"
 DEFAULT_SYNC_ALIGNMENT_REMOTE_NAME = "sync_alignment_manifest.jsonl"
+DEFAULT_GENERATOR_GAN_CONFIG = "configs/generator_mirror_gan_tiltaware_dataset_adaptive.yaml"
+DEFAULT_GENERATOR_PREPARED_DIR = "output/generator_mirror_gan_tiltaware_dataset_adaptive_prepared"
+DEFAULT_GENERATOR_SPLIT_DIR = "output/generator_mirror_gan_tiltaware_dataset_adaptive_split"
+DEFAULT_GENERATOR_VAL_SNAPSHOT = "snapshots/val_snapshot_talkvid_balanced_eth_gender_20260408.txt"
+DEFAULT_HDTF_ROOT = "data/hdtf/processed"
+DEFAULT_TALKVID_ROOT = "data/talkvid/processed"
 
 
 def log(message: str) -> None:
@@ -375,6 +381,136 @@ def command_train_generator_gan(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_split_generator_dataset(args: argparse.Namespace) -> int:
+    prepared_dir = args.prepared_dir
+    split_dir = args.split_dir
+    if args.force_prepared or not (TRAINING_ROOT / prepared_dir / "eligible_manifest.json").exists():
+        cmd = [
+            sys.executable,
+            "scripts/prepare_syncnet_dataset.py",
+            "--config",
+            args.config,
+            "--prepared-dir",
+            prepared_dir,
+            "--hdtf-tiers",
+            args.hdtf_tiers,
+            "--talkvid-tiers",
+            args.talkvid_tiers,
+            "--hdtf-root-rel",
+            args.hdtf_root_rel,
+            "--talkvid-root-rel",
+            args.talkvid_root_rel,
+        ]
+        run(cmd, cwd=TRAINING_ROOT, env=runtime_env(args), dry_run=args.dry_run)
+    else:
+        log(f"skip prepared rebuild: {TRAINING_ROOT / prepared_dir}")
+
+    train_snapshot = TRAINING_ROOT / split_dir / "train_snapshot.txt"
+    val_snapshot = TRAINING_ROOT / split_dir / "val_snapshot.txt"
+    if args.force_split or not (train_snapshot.exists() and val_snapshot.exists()):
+        cmd = [
+            sys.executable,
+            "scripts/build_generator_explicit_val_split.py",
+            "--prepared-dir",
+            prepared_dir,
+            "--split-dir",
+            split_dir,
+            "--explicit-val-snapshot",
+            args.val_snapshot,
+        ]
+        run(cmd, cwd=TRAINING_ROOT, env=runtime_env(args), dry_run=args.dry_run)
+    else:
+        log(f"skip split rebuild: {TRAINING_ROOT / split_dir}")
+    return 0
+
+
+def command_export_dataset_snapshot(args: argparse.Namespace) -> int:
+    if args.hf_revision and not args.hf_repo_id:
+        raise SystemExit("--hf-revision requires --hf-repo-id")
+    if args.hf_create_branch and not args.hf_repo_id:
+        raise SystemExit("--hf-create-branch requires --hf-repo-id")
+    if args.hf_create_branch and not args.hf_revision:
+        raise SystemExit("--hf-create-branch requires --hf-revision")
+    cmd = [
+        sys.executable,
+        "scripts/export_dataset_snapshot.py",
+        "--config",
+        args.config,
+        "--snapshot-dir",
+        args.snapshot_dir,
+        "--merge-manifest",
+        args.merge_manifest,
+        "--sync-alignment-registry",
+        args.sync_alignment_registry_path,
+        "--prepared-dir",
+        args.prepared_dir,
+        "--split-dir",
+        args.split_dir,
+        "--import-subdir",
+        args.import_subdir,
+        "--shard-size-gb",
+        str(args.shard_size_gb),
+    ]
+    if args.hdtf_root:
+        cmd.extend(["--hdtf-root", args.hdtf_root])
+    if args.talkvid_root:
+        cmd.extend(["--talkvid-root", args.talkvid_root])
+    for archive_dir in args.source_archive_dir or []:
+        cmd.extend(["--source-archive-dir", archive_dir])
+    if not args.include_cache:
+        cmd.append("--no-include-cache")
+    if not args.include_lazy_imports:
+        cmd.append("--no-include-lazy-imports")
+    if args.hf_repo_id:
+        cmd.extend(["--hf-repo-id", args.hf_repo_id])
+    if args.hf_create_repo:
+        cmd.append("--hf-create-repo")
+    if args.hf_revision:
+        cmd.extend(["--hf-revision", args.hf_revision])
+    if args.hf_create_branch:
+        cmd.append("--hf-create-branch")
+    if args.hf_private:
+        cmd.append("--hf-private")
+    if args.delete_uploaded_shards:
+        cmd.append("--delete-uploaded-shards")
+    run(cmd, cwd=TRAINING_ROOT, env=runtime_env(args), dry_run=args.dry_run)
+    return 0
+
+
+def command_import_dataset_snapshot(args: argparse.Namespace) -> int:
+    cmd = [sys.executable, "scripts/import_dataset_snapshot.py", "--snapshot-dir", args.snapshot_dir]
+    run(cmd, cwd=TRAINING_ROOT, env=runtime_env(args), dry_run=args.dry_run)
+    return 0
+
+
+def command_upload_dataset_snapshot_hf(args: argparse.Namespace) -> int:
+    if args.create_branch and not args.revision:
+        raise SystemExit("--create-branch requires --revision")
+    run(["hf", "auth", "whoami"], env=runtime_env(args), dry_run=args.dry_run)
+    if args.create_repo:
+        cmd = ["hf", "repos", "create", args.repo_id, "--type", "dataset", "--exist-ok"]
+        if args.private:
+            cmd.append("--private")
+        run(cmd, env=runtime_env(args), dry_run=args.dry_run)
+    if args.create_branch:
+        cmd = ["hf", "repos", "branch", "create", args.repo_id, args.revision, "--type", "dataset", "--exist-ok"]
+        run(cmd, env=runtime_env(args), dry_run=args.dry_run)
+    cmd = [
+        "hf",
+        "upload-large-folder",
+        args.repo_id,
+        args.snapshot_dir,
+        "--type",
+        "dataset",
+        "--num-workers",
+        str(args.num_workers),
+    ]
+    if args.revision:
+        cmd.extend(["--revision", args.revision])
+    run(cmd, env=runtime_env(args), dry_run=args.dry_run)
+    return 0
+
+
 def default_benchmark_checkpoint(repo_root: Path) -> Path:
     current_best = repo_root / "training/output/current_best_gan_20260414/generator_step000066000.pth"
     if current_best.exists():
@@ -510,7 +646,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     train_gan = subparsers.add_parser("train-generator-gan", help="Run mirror official-HQ GAN generator training")
     add_common_runtime_args(train_gan)
-    train_gan.add_argument("--config", default="configs/generator_mirror_gan_tiltaware_dataset_adaptive_20260414.yaml")
+    train_gan.add_argument("--config", default=DEFAULT_GENERATOR_GAN_CONFIG)
     train_gan.add_argument("--syncnet", default="output/syncnet_current_best_20260428/syncnet_best_our_eval.pth")
     train_gan.add_argument("--resume", default=None)
     train_gan.add_argument("--disc-resume", default=None)
@@ -518,6 +654,59 @@ def build_parser() -> argparse.ArgumentParser:
     train_gan.add_argument("--val-speaker-list", default=None)
     train_gan.add_argument("--eval-seed", type=int, default=20260408)
     train_gan.set_defaults(func=command_train_generator_gan)
+
+    split_generator = subparsers.add_parser("split-generator-dataset", help="Build prepared manifest and train/val split for generator training")
+    add_common_runtime_args(split_generator)
+    split_generator.add_argument("--config", default=DEFAULT_GENERATOR_GAN_CONFIG)
+    split_generator.add_argument("--prepared-dir", default=DEFAULT_GENERATOR_PREPARED_DIR)
+    split_generator.add_argument("--split-dir", default=DEFAULT_GENERATOR_SPLIT_DIR)
+    split_generator.add_argument("--val-snapshot", default=DEFAULT_GENERATOR_VAL_SNAPSHOT)
+    split_generator.add_argument("--hdtf-tiers", default="confident")
+    split_generator.add_argument("--talkvid-tiers", default="confident,medium")
+    split_generator.add_argument("--hdtf-root-rel", default=DEFAULT_HDTF_ROOT)
+    split_generator.add_argument("--talkvid-root-rel", default=DEFAULT_TALKVID_ROOT)
+    split_generator.add_argument("--force-prepared", action="store_true")
+    split_generator.add_argument("--force-split", action="store_true")
+    split_generator.set_defaults(func=command_split_generator_dataset)
+
+    export_snapshot = subparsers.add_parser("export-dataset-snapshot", help="Pack lazy imports, cache, sync registry, prepared manifest, and split into tar shards")
+    add_common_runtime_args(export_snapshot)
+    export_snapshot.add_argument("--config", default=DEFAULT_GENERATOR_GAN_CONFIG)
+    export_snapshot.add_argument("--snapshot-dir", required=True)
+    export_snapshot.add_argument("--hdtf-root", default=DEFAULT_HDTF_ROOT)
+    export_snapshot.add_argument("--talkvid-root", default=DEFAULT_TALKVID_ROOT)
+    export_snapshot.add_argument("--import-subdir", default="_lazy_imports")
+    export_snapshot.add_argument("--merge-manifest", default="output/faceclip_merge/merge_manifest.jsonl")
+    export_snapshot.add_argument("--sync-alignment-registry-path", default=DEFAULT_SYNC_ALIGNMENT_REGISTRY_PATH)
+    export_snapshot.add_argument("--prepared-dir", default=DEFAULT_GENERATOR_PREPARED_DIR)
+    export_snapshot.add_argument("--split-dir", default=DEFAULT_GENERATOR_SPLIT_DIR)
+    export_snapshot.add_argument("--source-archive-dir", action="append", default=[])
+    export_snapshot.add_argument("--include-cache", action=argparse.BooleanOptionalAction, default=True)
+    export_snapshot.add_argument("--include-lazy-imports", action=argparse.BooleanOptionalAction, default=True)
+    export_snapshot.add_argument("--shard-size-gb", type=float, default=20.0)
+    export_snapshot.add_argument("--hf-repo-id", default=None)
+    export_snapshot.add_argument("--hf-create-repo", action="store_true")
+    export_snapshot.add_argument("--hf-revision", default=None)
+    export_snapshot.add_argument("--hf-create-branch", action="store_true")
+    export_snapshot.add_argument("--hf-private", action="store_true")
+    export_snapshot.add_argument("--delete-uploaded-shards", action="store_true")
+    export_snapshot.set_defaults(func=command_export_dataset_snapshot)
+
+    import_snapshot = subparsers.add_parser("import-dataset-snapshot", help="Restore a dataset snapshot into the current training root")
+    add_common_runtime_args(import_snapshot)
+    import_snapshot.add_argument("--snapshot-dir", required=True)
+    import_snapshot.set_defaults(func=command_import_dataset_snapshot)
+
+    upload_snapshot = subparsers.add_parser("upload-dataset-snapshot-hf", help="Upload a dataset snapshot folder to Hugging Face Hub")
+    add_common_runtime_args(upload_snapshot)
+    upload_snapshot.add_argument("--repo-id", required=True)
+    upload_snapshot.add_argument("--snapshot-dir", required=True)
+    upload_snapshot.add_argument("--create-repo", action="store_true")
+    upload_snapshot.add_argument("--revision", default=None)
+    upload_snapshot.add_argument("--create-branch", action="store_true")
+    upload_snapshot.add_argument("--private", action="store_true")
+    upload_snapshot.add_argument("--num-workers", type=int, default=8)
+    upload_snapshot.set_defaults(func=command_upload_dataset_snapshot_hf)
 
     benchmark = subparsers.add_parser("benchmark", help="Run the tilt-aware x96 benchmark")
     add_common_runtime_args(benchmark)

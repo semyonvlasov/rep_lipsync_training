@@ -61,7 +61,7 @@ FETCH_VENV ?= $(REPO_ROOT)/.venv-fetch
 SMOKE_LAZY_WORKFLOW ?= workflows/train/run_lazy_smoke_remote_20260325.sh
 SYNCNET_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
 GENERATOR_CONFIG ?= configs/lipsync_cuda3090_hdtf_talkvid.yaml
-GENERATOR_MIRROR_GAN_CONFIG ?= configs/generator_mirror_gan_tiltaware_dataset_adaptive_20260414.yaml
+GENERATOR_MIRROR_GAN_CONFIG ?= configs/generator_mirror_gan_tiltaware_dataset_adaptive.yaml
 GENERATOR_MIRROR_GAN_SYNCNET ?= output/syncnet_current_best_20260428/syncnet_best_our_eval.pth
 GENERATOR_MIRROR_GAN_EVAL_SEED ?= 20260408
 PREWARM_CONFIG ?= configs/syncnet_cuda3090_medium.yaml
@@ -196,7 +196,7 @@ help:
 	@echo "  DATASET_RELOAD=1  # ignore merge manifest and revisit all archives"
 	@echo "  SYNCNET_CONFIG=configs/syncnet_cuda3090_medium.yaml"
 	@echo "  GENERATOR_CONFIG=configs/lipsync_cuda3090_hdtf_talkvid.yaml"
-	@echo "  GENERATOR_MIRROR_GAN_CONFIG=configs/generator_mirror_gan_tiltaware_dataset_adaptive_20260414.yaml"
+	@echo "  GENERATOR_MIRROR_GAN_CONFIG=configs/generator_mirror_gan_tiltaware_dataset_adaptive.yaml"
 	@echo "  GENERATOR_MIRROR_GAN_SYNCNET=output/syncnet_current_best_20260428/syncnet_best_our_eval.pth"
 	@echo "  GENERATOR_MIRROR_GAN_EVAL_SEED=20260408"
 	@echo "  SYNCNET_TEACHER=../../models/wav2lip/checkpoints/lipsync_expert.pth"

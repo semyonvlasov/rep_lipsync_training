@@ -112,6 +112,22 @@ def load_json(path: Path) -> dict:
         return {}
 
 
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def attach_merge_source_metadata(meta: dict, *, args, archive_name: str, dataset_kind: str) -> dict:
+    updated = dict(meta)
+    updated["source_archive"] = archive_name
+    updated["source_archive_remote"] = args.remote if not args.source_dir else None
+    updated["source_archive_folder_id"] = args.folder_id if not args.source_dir else None
+    updated["source_archive_imported_at"] = timestamp()
+    updated["source_archive_dataset_kind"] = dataset_kind
+    return updated
+
+
 def rclone_lsf(remote: str, folder_id: str) -> list[str]:
     cmd = [
         "rclone",
@@ -465,6 +481,14 @@ def main() -> int:
                     counts["skipped_duplicate"] += 1
                     existing_names.add(sample["name"])
                     continue
+
+                sample_meta = attach_merge_source_metadata(
+                    sample["meta"],
+                    args=args,
+                    archive_name=archive_name,
+                    dataset_kind=dataset_kind,
+                )
+                write_json(sample["json_path"], sample_meta)
 
                 shutil.move(str(sample["mp4_path"]), str(dest_mp4))
                 shutil.move(str(sample["json_path"]), str(dest_json))

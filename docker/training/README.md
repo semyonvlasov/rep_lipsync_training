@@ -70,9 +70,61 @@ Common commands:
 lipsyncctl doctor --require-prepared
 lipsyncctl merge-dataset --include-tier confident --include-tier medium
 lipsyncctl prewarm-cache --max-items 512
+lipsyncctl split-generator-dataset
 lipsyncctl train-syncnet
 lipsyncctl train-generator-gan
 lipsyncctl benchmark --device cuda
+```
+
+After a full prewarm, export a portable dataset snapshot when you want to move
+the materialized lazy cache and sync metadata to another instance. Keep the
+training root stable at `/opt/lipsync/training` after import; lazy cache keys
+include absolute source paths.
+
+For Hugging Face uploads, provide auth through environment, not through command
+arguments:
+
+```bash
+export HF_TOKEN=hf_...
+hf auth whoami
+```
+
+Preferred export flow streams shards to a HF dataset repo. With
+`--delete-uploaded-shards`, each local shard is removed only after a successful
+upload, so peak disk usage is roughly the dataset plus one shard. Put each
+snapshot into its own HF branch/revision so later exports do not overwrite it.
+
+```bash
+lipsyncctl split-generator-dataset
+lipsyncctl export-dataset-snapshot \
+  --snapshot-dir output/dataset_snapshots/generator_tiltaware_YYYYMMDD \
+  --shard-size-gb 20 \
+  --hf-repo-id <namespace>/<dataset-repo> \
+  --hf-create-repo \
+  --hf-revision snapshot-YYYYMMDD \
+  --hf-create-branch \
+  --hf-private \
+  --delete-uploaded-shards
+
+hf download <namespace>/<dataset-repo> \
+  --type dataset \
+  --revision snapshot-YYYYMMDD \
+  --local-dir /opt/lipsync/training/output/dataset_snapshots/generator_tiltaware_YYYYMMDD
+lipsyncctl import-dataset-snapshot \
+  --snapshot-dir output/dataset_snapshots/generator_tiltaware_YYYYMMDD
+```
+
+If you intentionally want a full local snapshot first, omit `--hf-repo-id` from
+`export-dataset-snapshot`, then upload the resulting folder separately:
+
+```bash
+lipsyncctl upload-dataset-snapshot-hf \
+  --repo-id <namespace>/<dataset-repo> \
+  --snapshot-dir output/dataset_snapshots/generator_tiltaware_YYYYMMDD \
+  --create-repo \
+  --revision snapshot-YYYYMMDD \
+  --create-branch \
+  --private
 ```
 
 Private/current-best checkpoints are intentionally downloaded at runtime by

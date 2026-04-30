@@ -24,6 +24,7 @@ sys.path.insert(0, TRAINING_ROOT)
 from data import LipSyncDataset
 from data.sync_alignment import (
     is_failed_sync_alignment,
+    load_sync_alignment,
     load_sync_alignment_registry,
     write_failed_sync_alignment_to_meta_path,
     write_sync_alignment_registry,
@@ -265,6 +266,9 @@ def collect_entries(helper, roots, allowlist=None, skip_bad_samples=True):
     stats = {
         "processed_selected": 0,
         "lazy_selected": 0,
+        "lazy_sync_aligned": 0,
+        "lazy_sync_missing": 0,
+        "lazy_sync_failed": 0,
         "skipped_allowlist": 0,
         "skipped_bad": 0,
         "skipped_duplicate": 0,
@@ -329,6 +333,12 @@ def collect_entries(helper, roots, allowlist=None, skip_bad_samples=True):
                     name=name,
                     root=root,
                 )
+                if is_failed_sync_alignment(meta):
+                    stats["lazy_sync_failed"] += 1
+                elif load_sync_alignment(meta) is not None:
+                    stats["lazy_sync_aligned"] += 1
+                else:
+                    stats["lazy_sync_missing"] += 1
                 if skip_bad_samples and meta.get("bad_sample", False):
                     stats["skipped_bad"] += 1
                     continue
@@ -415,6 +425,8 @@ def main():
     log(
         "Selected entries: "
         f"processed={stats['processed_selected']} lazy={stats['lazy_selected']} "
+        f"sync_ready={stats['lazy_sync_aligned']} sync_missing={stats['lazy_sync_missing']} "
+        f"sync_failed={stats['lazy_sync_failed']} "
         f"skipped_allowlist={stats['skipped_allowlist']} skipped_bad={stats['skipped_bad']} "
         f"skipped_duplicate={stats['skipped_duplicate']}"
     )
