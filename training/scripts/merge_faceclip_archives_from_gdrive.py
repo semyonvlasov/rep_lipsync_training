@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Merge processed faceclip archives into the current dataset roots with dedupe.
+Merge processed tilt-aware faceclip archives into the current dataset roots with dedupe.
 
 The script imports canonical faceclip samples (`mp4 + json`) from processed
 archives into the existing dataset roots under:
@@ -22,6 +22,9 @@ neutral root is `data/talkvid/processed`, and it may contain `confident`,
 By default, merge is incremental relative to `--manifest-path`: archives whose
 latest recorded stage is already merged are skipped. Use `--reload-all` only
 when you intentionally want to revisit every matching source archive.
+
+The default Google Drive source for this merge flow is the canonical tilt-aware
+processed dataset folder configured by the caller, typically via `make dataset`.
 """
 
 import argparse
@@ -299,7 +302,11 @@ def cleanup_paths(paths: list[Path]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--folder-id", default=None, help="Google Drive folder id with processed faceclip archives")
+    parser.add_argument(
+        "--folder-id",
+        default=None,
+        help="Google Drive folder id with processed tilt-aware faceclip archives",
+    )
     parser.add_argument("--source-dir", default=None, help="Optional local directory with already downloaded faceclip archives")
     parser.add_argument("--remote", default="gdrive:")
     parser.add_argument("--archive-glob", default="*faceclips*.tar")
